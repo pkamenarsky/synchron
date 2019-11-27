@@ -1,32 +1,44 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+
 module Lib
     ( someFunc
     ) where
 
 import Control.Applicative
+import Control.Monad
 import Control.Monad.Free
+import Control.Monad.IO.Class
 
-import Concur.Core
+import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TChan
-import Control.ShiftMap
 
-view :: v -> Widget v ()
-view v = Widget $ liftF $ StepView v ()
+import Control.Monad.Trans.Cont
 
-receive :: TChan a -> Widget v a
-receive ch = liftSafeBlockingIO $ atomically $ readTChan ch
+import Debug.Trace
 
-to :: TChan v -> Widget v a -> Widget () a
-to ch w = undefined
+newtype Concur a = Concur (ContT () IO a)
+  deriving (Functor, Applicative, Monad, MonadIO)
 
-gh :: (a, b) -> TChan a -> TChan b -> TChan Int -> Widget () ()
-gh (a, b) ach bch out = do
-  r <- fmap Left (receive ach) <|> fmap Right (receive bch)
-  liftSafeBlockingIO $ atomically $ writeTChan out 5
-  case r of
-    Left a'  -> gh (a', b) ach bch out
-    Right b' -> gh (a, b') ach bch out
+runConcur :: Concur () -> IO ()
+runConcur (Concur c) = runContT c pure
+
+orr :: [Concur a] -> Concur a
+orr [c] = c
+orr cs = Concur $ ContT $ \k -> do
+  r <- newEmptyMVar
+  rs <- forM cs $ \(Concur c) -> do
+    async $ runContT c k
+  void $ waitAnyCancel rs
 
 someFunc :: IO ()
-someFunc = putStrLn "someFunc"
+someFunc = runConcur $ do
+  a <- orr [ Left <$> delay 1000000 "asd", Right <$> delay 1000000 "cde" ]
+  liftIO $ traceIO $ show a
+  where
+    delay n a = do
+      liftIO $ traceIO "Before"
+      liftIO $ threadDelay n
+      liftIO $ traceIO "After"
+      pure a
