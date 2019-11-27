@@ -21,10 +21,15 @@ description:         Please see the README on GitHub at <https://github.com/gith
 
 dependencies:
 - base >= 4.7 && < 5
+- amqp
 - async
 - free
+- http-types
 - transformers
 - stm
+- wai
+- wai-websockets
+- warp
 
 library:
   source-dirs: src
