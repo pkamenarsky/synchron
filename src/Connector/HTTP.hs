@@ -1,4 +1,4 @@
-module Connectors where
+module Connector.HTTP where
 
 import Lib
 
