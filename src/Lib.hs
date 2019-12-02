@@ -4,6 +4,8 @@ module Lib where
 
 import Control.Applicative
 import Control.Monad
+import Control.Monad.Fail (MonadFail (fail))
+import qualified Control.Monad.Fail as F
 import Control.Monad.Free
 import Control.Monad.IO.Class
 
@@ -22,6 +24,9 @@ newtype Concur a = Concur (ContT () IO a)
 instance Alternative Concur where
   empty = Concur $ ContT $ const $ pure ()
   a <|> b = orr [a, b]
+
+instance MonadFail Concur where
+  fail e = Concur $ ContT $ const $ F.fail e
 
 runConcur :: Concur () -> IO ()
 runConcur (Concur c) = runContT c pure
