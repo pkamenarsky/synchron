@@ -38,7 +38,8 @@ packages:
 # Dependency packages to be pulled from upstream that are not in the resolver
 # using the same syntax as the packages field.
 # (e.g., acme-missiles-0.3)
-extra-deps: []
+extra-deps:
+- broadcast-chan-0.2.0.2@sha256:563a482d8a2e2102598cc7d41d0cf079aee09077d3b6d6009b1fd1e41a74f1e9
 
 # Override default flag values for local packages and extra-deps
 # flags: {}
