@@ -21,6 +21,7 @@ import Control.Monad.Free
 import Control.Monad.IO.Class
 
 import Data.IORef
+import Data.Maybe (fromMaybe)
 
 import Network.HTTP.Types
 
@@ -169,46 +170,29 @@ instance Monad S where
 
 --------------------------------------------------------------------------------
 
-data Resumable
-data Interruptible
-
-type Continuation a = TVar (Maybe (Suspend Resumable a))
+type Continuation a = TVar (Maybe (Suspend a))
 
 newCont :: IO (Continuation a)
 newCont = newTVarIO Nothing
 
 data SuspendF next
   = forall a. Step (STM a) (a -> next)
-  | forall a. Resume (Continuation a) (Suspend Interruptible a)
-  | Break next
-  | forall a. Orr [Suspend Resumable a] ((a, [Maybe (Suspend Resumable a)]) -> next)
+  | forall a. Orr [Suspend a] ((a, [Suspend a]) -> next)
 
 deriving instance Functor SuspendF
 
-newtype Suspend t a = Suspend (Free SuspendF a)
+newtype Suspend a = Suspend (Free SuspendF a)
   deriving (Functor, Applicative, Monad)
 
-step :: STM a -> Suspend t a
+step :: STM a -> Suspend a
 step io = Suspend $ liftF (Step io id)
 
-resume :: Continuation a -> Suspend Interruptible a -> Suspend Resumable a
-resume k m = Suspend $ liftF (Resume k m)
-
-resumable :: Suspend Interruptible a -> Suspend t (Suspend Resumable a)
-resumable m = do
-  k <- step $ newTVar Nothing
-  pure $ resume k m
-
-break :: Suspend t ()
-break = Suspend $ liftF (Break ())
-
-orrSuspend :: [Suspend Resumable a] -> Suspend Resumable (a, [Maybe (Suspend Resumable a)])
+orrSuspend :: [Suspend a] -> Suspend (a, [Suspend a])
 orrSuspend ss = Suspend $ liftF (Orr ss id)
 
-runSuspend :: Maybe (Continuation a) -> Suspend t a -> IO ()
-runSuspend _ (Suspend (Pure a)) = pure ()
+runSuspend :: Maybe (Continuation a) -> Suspend a -> IO a
+runSuspend _ (Suspend (Pure a)) = pure a
 runSuspend k (Suspend (Free (Step step next))) = do
-  traceIO "STEP"
   a <- atomically $ case k of
     Just k' -> do
       a <- step
@@ -216,31 +200,27 @@ runSuspend k (Suspend (Free (Step step next))) = do
       pure a
     Nothing -> step
   runSuspend k (Suspend $ next a)
-runSuspend (Just _) (Suspend (Free (Resume _ _))) = error "Nested resume"
-runSuspend Nothing (Suspend (Free (Resume k t))) = do
-  traceIO "RESUME"
-  k' <- atomically $ readTVar k
-  case k' of
-    Just k'' -> runSuspend (Just k) k''
-    Nothing  -> runSuspend (Just k) t
-runSuspend k (Suspend (Free (Break next))) = do
-  traceIO "BREAK"
-  case k of
-    Just k' -> atomically $ writeTVar k' (Just $ Suspend next)
-    Nothing -> pure ()
-  pure ()
 runSuspend k (Suspend (Free (Orr ss next))) = do
   r  <- newEmptyMVar
   ks <- traverse (const $ newTVarIO Nothing) ss
 
-  flip traverse (zip ks ss) $ \(k, s) -> forkIO $ do
-    runSuspend (Just k) s
-    putMVar r undefined
+  tids <- flip traverse (zip3 ks ss [0..]) $ \(k, s, i) -> forkIO $ do
+    a <- runSuspend (Just k) s
+    putMVar r (a, i)
 
-  a  <- takeMVar r
+  (a, i) <- takeMVar r
+
+  traverse killThread tids
+
   rs <- traverse (atomically . readTVar) ks
 
-  runSuspend k (Suspend $ next (a, rs))
+  runSuspend k $ Suspend $ next
+    (a
+    , [ fromMaybe s r
+      | (s, r, j) <- zip3 ss rs [0..]
+      , i /= j
+      ]
+    )
 
 testCont = do
   k <- newCont
@@ -250,19 +230,29 @@ testCont = do
     a <- atomically $ readTChan c
     traceIO a
 
+  v1 <- registerDelay 1000000
+  v2 <- registerDelay 2000000
+
+  (_, rs) <- runSuspend Nothing $ orrSuspend [ dp v1 c "A", dp v2 c "B" ]
+  (_, rs) <- runSuspend Nothing $ orrSuspend rs
+
+  print $ length rs
+
   -- runSuspend Nothing $ resume k $ f c 0
   -- runSuspend Nothing $ resume k $ f c 0
   -- runSuspend Nothing $ resume k $ f c 0
   -- runSuspend Nothing $ resume k $ f c 0
 
-  runSuspend Nothing $ do
-    r <- resumable (f c 0)
-    r
-    r
-    r
+  pure ()
 
   where
+    dp v c s = do
+      step $ writeTChan c ("BEFORE: " <> s)
+      step $ do
+        v' <- readTVar v
+        check v'
+      step $ writeTChan c ("AFTER: " <> s)
+
     f c n = do
       step $ writeTChan c (show n)
-      Connector.WebSocket.break
       f c (n + 1)
