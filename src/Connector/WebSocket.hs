@@ -181,6 +181,7 @@ data SuspendF next
   = forall a. Step (STM a) (a -> next)
   | forall a. Resume (Continuation a) (Suspend Interruptible a)
   | Break next
+  | forall a. Orr [Suspend Resumable a] ((a, [Maybe (Suspend Resumable a)]) -> next)
 
 deriving instance Functor SuspendF
 
@@ -193,12 +194,21 @@ step io = Suspend $ liftF (Step io id)
 resume :: Continuation a -> Suspend Interruptible a -> Suspend Resumable a
 resume k m = Suspend $ liftF (Resume k m)
 
+resumable :: Suspend Interruptible a -> Suspend t (Suspend Resumable a)
+resumable m = do
+  k <- step $ newTVar Nothing
+  pure $ resume k m
+
 break :: Suspend t ()
 break = Suspend $ liftF (Break ())
+
+orrSuspend :: [Suspend Resumable a] -> Suspend Resumable (a, [Maybe (Suspend Resumable a)])
+orrSuspend ss = Suspend $ liftF (Orr ss id)
 
 runSuspend :: Maybe (Continuation a) -> Suspend t a -> IO ()
 runSuspend _ (Suspend (Pure a)) = pure ()
 runSuspend k (Suspend (Free (Step step next))) = do
+  traceIO "STEP"
   a <- atomically $ case k of
     Just k' -> do
       a <- step
@@ -208,15 +218,29 @@ runSuspend k (Suspend (Free (Step step next))) = do
   runSuspend k (Suspend $ next a)
 runSuspend (Just _) (Suspend (Free (Resume _ _))) = error "Nested resume"
 runSuspend Nothing (Suspend (Free (Resume k t))) = do
+  traceIO "RESUME"
   k' <- atomically $ readTVar k
   case k' of
     Just k'' -> runSuspend (Just k) k''
     Nothing  -> runSuspend (Just k) t
 runSuspend k (Suspend (Free (Break next))) = do
+  traceIO "BREAK"
   case k of
     Just k' -> atomically $ writeTVar k' (Just $ Suspend next)
     Nothing -> pure ()
   pure ()
+runSuspend k (Suspend (Free (Orr ss next))) = do
+  r  <- newEmptyMVar
+  ks <- traverse (const $ newTVarIO Nothing) ss
+
+  flip traverse (zip ks ss) $ \(k, s) -> forkIO $ do
+    runSuspend (Just k) s
+    putMVar r undefined
+
+  a  <- takeMVar r
+  rs <- traverse (atomically . readTVar) ks
+
+  runSuspend k (Suspend $ next (a, rs))
 
 testCont = do
   k <- newCont
@@ -226,10 +250,16 @@ testCont = do
     a <- atomically $ readTChan c
     traceIO a
 
-  runSuspend Nothing $ resume k $ f c 0
-  runSuspend Nothing $ resume k $ f c 0
-  runSuspend Nothing $ resume k $ f c 0
-  runSuspend Nothing $ resume k $ f c 0
+  -- runSuspend Nothing $ resume k $ f c 0
+  -- runSuspend Nothing $ resume k $ f c 0
+  -- runSuspend Nothing $ resume k $ f c 0
+  -- runSuspend Nothing $ resume k $ f c 0
+
+  runSuspend Nothing $ do
+    r <- resumable (f c 0)
+    r
+    r
+    r
 
   where
     f c n = do
