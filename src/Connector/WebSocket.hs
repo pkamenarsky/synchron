@@ -1,8 +1,6 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -171,27 +169,28 @@ instance Monad S where
 
 --------------------------------------------------------------------------------
 
-data Resumable = Interruptible | Resumable
+data Resumable
+data Interruptible
 
-type Continuation a = TVar (Maybe (Suspend 'Resumable a))
+type Continuation a = TVar (Maybe (Suspend Resumable a))
 
 newCont :: IO (Continuation a)
 newCont = newTVarIO Nothing
 
 data SuspendF next
   = forall a. Step (STM a) (a -> next)
-  | forall a. Resume (Continuation a) (Suspend 'Interruptible a)
+  | forall a. Resume (Continuation a) (Suspend Interruptible a)
   | Break next
 
 deriving instance Functor SuspendF
 
-newtype Suspend (t :: Resumable) a = Suspend (Free SuspendF a)
+newtype Suspend t a = Suspend (Free SuspendF a)
   deriving (Functor, Applicative, Monad)
 
-step :: STM a -> Suspend 'Interruptible a
+step :: STM a -> Suspend t a
 step io = Suspend $ liftF (Step io id)
 
-resume :: Continuation a -> Suspend 'Interruptible a -> Suspend 'Resumable a
+resume :: Continuation a -> Suspend Interruptible a -> Suspend Resumable a
 resume k m = Suspend $ liftF (Resume k m)
 
 break :: Suspend t ()
