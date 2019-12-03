@@ -9,14 +9,13 @@ module Connector.WebSocket where
 
 import Lib (Concur, runConcur, orr, andd)
 
-import BroadcastChan
-import qualified BroadcastChan.Throw as BT
-
 import Control.Applicative
 import Control.Concurrent
+import Control.Concurrent.Async
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TChan
 import Control.Monad
+import Control.Monad.Fail
 import Control.Monad.Free
 import Control.Monad.IO.Class
 
@@ -42,11 +41,15 @@ newCont = newTVarIO Nothing
 data SuspendF next
   = forall a. Step (STM a) (a -> next)
   | forall a. Orr [Suspend a] ((a, [Suspend a]) -> next)
+  | forall a. Andd [Suspend a] ([a] -> next)
 
 deriving instance Functor SuspendF
 
-newtype Suspend a = Suspend (Free SuspendF a)
+newtype Suspend a = Suspend { getSuspendF :: Free SuspendF a }
   deriving (Functor, Applicative, Monad)
+
+instance MonadFail Suspend where
+  fail e = error e
 
 step :: STM a -> Suspend a
 step io = Suspend $ liftF (Step io id)
@@ -54,37 +57,53 @@ step io = Suspend $ liftF (Step io id)
 orrSuspend :: [Suspend a] -> Suspend (a, [Suspend a])
 orrSuspend ss = Suspend $ liftF (Orr ss id)
 
-runSuspend :: Maybe (Continuation a) -> Suspend a -> IO a
-runSuspend _ (Suspend (Pure a)) = pure a
-runSuspend k (Suspend (Free (Step step next))) = do
-  a <- atomically $ case k of
-    Just k' -> do
-      a <- step
-      writeTVar k' (Just $ Suspend $ next a)
-      pure a
-    Nothing -> step
-  runSuspend k (Suspend $ next a)
-runSuspend k (Suspend (Free (Orr ss next))) = do
-  r  <- newEmptyMVar
-  ks <- traverse (const $ newTVarIO Nothing) ss
+anddSuspend :: [Suspend a] -> Suspend [a]
+anddSuspend ss = Suspend $ liftF (Andd ss id)
 
-  tids <- flip traverse (zip3 ks ss [0..]) $ \(k, s, i) -> forkIO $ do
-    a <- runSuspend (Just k) s
+runSuspend :: (Suspend a -> STM ()) -> Suspend a -> IO a
+runSuspend retain (Suspend (Pure a)) = do
+  atomically $ retain $ Suspend (Pure a)
+  pure a
+runSuspend retain (Suspend (Free (Step step next))) = do
+  a <- atomically $ do
+    a <- step
+    retain (Suspend $ next a)
+    pure a
+  runSuspend retain (Suspend $ next a)
+runSuspend retain (Suspend (Free (Orr ss next))) = do
+  r <- newEmptyMVar
+  k <- newTVarIO ss
+
+  tids <- flip traverse (zip ss [0..]) $ \(s, i) -> forkIO $ do
+    a <- flip runSuspend s $ \n -> do
+      ks <- readTVar k
+      let ks' = (take i ks <> [n] <> drop (i + 1) ks)
+      writeTVar k ks'
+      retain $ Suspend $ Free $ Orr ks' next
     putMVar r (a, i)
 
   (a, i) <- takeMVar r
 
   traverse killThread tids
 
-  rs <- traverse (atomically . readTVar) ks
+  ks <- atomically $ readTVar k
 
-  runSuspend k $ Suspend $ next
-    (a
-    , [ fromMaybe s r
-      | (s, r, j) <- zip3 ss rs [0..]
-      , i /= j
-      ]
-    )
+  runSuspend retain $ Suspend $ next (a, (take i ks <> drop (i + 1) ks))
+runSuspend retain (Suspend (Free (Andd ss next))) = do
+  rs <- traverse (const newEmptyMVar) ss
+  k  <- newTVarIO ss
+
+  tids <- flip traverse (zip3 rs ss [0..]) $ \(r, s, i) -> forkIO $ do
+    a <- flip runSuspend s $ \n -> do
+      ks <- readTVar k
+      let ks' = (take i ks <> [n] <> drop (i + 1) ks)
+      writeTVar k ks'
+      retain $ Suspend $ Free (Andd ks' next)
+    putMVar r a
+
+  as <- traverse takeMVar rs
+
+  runSuspend retain $ Suspend (next as)
 
 testCont = do
   k <- newCont
@@ -97,8 +116,8 @@ testCont = do
   v1 <- registerDelay 1000000
   v2 <- registerDelay 2000000
 
-  (_, rs) <- runSuspend Nothing $ orrSuspend [ dp v1 c "A", dp v2 c "B" ]
-  (_, rs) <- runSuspend Nothing $ orrSuspend rs
+  (_, rs) <- runSuspend (const $ pure ()) $ orrSuspend [ dp v1 c "A", dp v2 c "B" ]
+  (_, rs) <- runSuspend (const $ pure ()) $ orrSuspend rs
 
   print $ length rs
 
@@ -123,9 +142,9 @@ testCont = do
 
 --------------------------------------------------------------------------------
 
-data WebSocketServer s = WebSocketServer (BroadcastChan In DataMessage) (Chan DataMessage)
+data WebSocketServer s = WebSocketServer (TChan WebSocket)
 
-data WebSocket = WebSocket (BroadcastChan Out DataMessage) (Chan DataMessage)
+newtype WebSocket = WebSocket (TVar (Maybe (TChan DataMessage, TChan DataMessage)))
 
 websocket
   :: Port
@@ -133,75 +152,77 @@ websocket
   -> (forall s. WebSocketServer s -> IO ())
   -> IO ()
 websocket port options k = do
-  run port $ websocketsOr defaultConnectionOptions wsApp backupApp
-  pure undefined
-  where
-    wsApp pending = do
-      inCh  <- newBroadcastChan
-      outCh <- newChan
+  ch     <- newTChanIO
+  server <- async $ run port $ websocketsOr defaultConnectionOptions (wsApp ch) backupApp
 
+  k $ WebSocketServer ch
+  cancel server
+
+  where
+    wsApp ch pending = do
       conn  <- acceptRequest pending
 
-      inTid <- forkIO $ forever $ do
-        r <- receiveDataMessage conn
-        writeBChan inCh r
+      inCh  <- newTChanIO
+      outCh <- newTChanIO
 
-      outTid <- forkIO $ forever $ do
-        r <- readChan outCh
-        sendDataMessage conn r
+      let inA = forever $ do
+            r <- receiveDataMessage conn
+            atomically $ writeTChan inCh r
 
-      k $ WebSocketServer inCh outCh
+          inB = forever $ do
+            r <- atomically $ readTChan outCh
+            sendDataMessage conn r
 
-      killThread inTid
-      killThread outTid
+      ws <- newTVarIO $ Just (inCh, outCh)
+      atomically $ writeTChan ch (WebSocket ws)
+
+      withAsync inA $ \a -> do
+      withAsync inB $ \b -> do
+        mkWeakTVar ws $ do
+          cancel a
+          cancel b
+        waitEither a b
+
+      atomically $ writeTVar ws Nothing
 
     backupApp _ respond = respond $ responseLBS status400 [] "Not a WebSocket request"
 
--- accept :: WebSocketServer s -> Concur WebSocket
--- accept (WebSocketServer inBCh outCh) = liftIO $ do
---   inBChL <- newBChanListener inBCh
---   pure $ WebSocket inBChL outCh
--- 
--- accept' :: WebSocketServer s -> (WebSocket -> Concur ()) -> Concur ()
--- accept' = undefined
--- 
--- receive :: WebSocket -> Concur DataMessage
--- receive (WebSocket inBChL _) = liftIO $ BT.readBChan inBChL
--- 
--- send :: WebSocket -> DataMessage -> Concur ()
--- send (WebSocket _ outCh) m = liftIO $ writeChan outCh m
--- 
--- test :: IO ()
--- test = do
---   websocket 6666 defaultConnectionOptions $ \wss -> do
---   websocket 6667 defaultConnectionOptions $ \wss2 -> do
---     runConcur (acceptBoth wss wss2 Nothing Nothing)
--- 
---     where
---       acceptBoth wss wss2 ws' ws2' = case (ws', ws2') of
---         (Just ws, Just ws2) -> go ws ws2
---         (Nothing, Just ws2) -> do
---           ws <- accept wss
---           go ws ws2
---         (Just ws, Nothing)  -> do
---           ws2 <- accept wss2
---           go ws ws2
---         (Nothing, Nothing)  -> do
---           r <- orr [ Left <$> accept wss, Right <$> accept wss2 ]
---           case r of
---             Left  ws  -> acceptBoth wss wss2 (Just ws) ws2'
---             Right ws2 -> acceptBoth wss wss2 ws' (Just ws2)
--- 
---       acceptBoth' wss wss2 _ _ = do
---         [ws, ws2] <- andd [ accept wss, accept wss2 ]
---         go ws ws2
--- 
---       go ws ws2 = do
---         r <- orr
---           [ Left  <$> Connector.WebSocket.receive ws
---           , Right <$> Connector.WebSocket.receive ws2
---           ]
---         liftIO $ case r of
---           Left  ds -> print ds
---           Right ds -> print ds
---         go ws ws2
+accept :: WebSocketServer s -> Suspend WebSocket
+accept (WebSocketServer ch) = step $ readTChan ch
+
+receive :: WebSocket -> Suspend (Maybe DataMessage)
+receive (WebSocket v) = step $ do
+  ws <- readTVar v
+
+  case ws of
+    Just (inCh, _) -> Just <$> readTChan inCh
+    Nothing        -> pure Nothing
+
+send :: WebSocket -> DataMessage -> Suspend Bool
+send (WebSocket v) m = step $ do
+  ws <- readTVar v
+
+  case ws of
+    Just (_, outCh) -> do
+      writeTChan outCh m
+      pure True
+    Nothing -> pure False
+
+test :: IO ()
+test = do
+  websocket 6666 defaultConnectionOptions $ \wss -> do
+  websocket 6667 defaultConnectionOptions $ \wss2 -> do
+    runSuspend (const $ pure ()) $ do
+      [ws, ws2] <- anddSuspend [ accept wss, accept wss2 ]
+      go ws ws2
+
+    where
+      go ws ws2 = do
+        r <- orrSuspend
+          [ Left  <$> Connector.WebSocket.receive ws
+          , Right <$> Connector.WebSocket.receive ws2
+          ]
+        -- liftIO $ case r of
+        --   Left  ds -> print ds
+        --   Right ds -> print ds
+        go ws ws2
