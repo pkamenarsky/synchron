@@ -41,6 +41,9 @@ orr cs = Concur $ ContT $ \k -> do
     forM_ tids killThread
     k r
 
+andd :: [Concur a] -> Concur [a]
+andd = undefined
+
 receive :: Chan a -> Concur a
 receive = liftIO . readChan
 
