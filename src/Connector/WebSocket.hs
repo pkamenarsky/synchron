@@ -33,11 +33,6 @@ import Network.WebSockets.Connection
 
 import Debug.Trace
 
-type Continuation a = TVar (Maybe (Suspend a))
-
-newCont :: IO (Continuation a)
-newCont = newTVarIO Nothing
-
 data SuspendF next
   = forall a. Step (STM a) (a -> next)
   | forall a. Orr [Suspend a] ((a, [Suspend a]) -> next)
@@ -74,21 +69,37 @@ runSuspend retain (Suspend (Free (Orr ss next))) = do
   r <- newEmptyMVar
   k <- newTVarIO ss
 
-  tids <- flip traverse (zip ss [0..]) $ \(s, i) -> forkIO $ do
-    a <- flip runSuspend s $ \n -> do
-      ks <- readTVar k
-      let ks' = (take i ks <> [n] <> drop (i + 1) ks)
-      writeTVar k ks'
-      retain $ Suspend $ Free $ Orr ks' next
-    putMVar r (a, i)
+  go k r (zip ss [0..]) []
+  -- tids <- flip traverse (zip ss [0..]) $ \(s, i) -> forkIO $ do
+  --   a <- flip runSuspend s $ \n -> do
+  --     ks <- readTVar k
+  --     let ks' = (take i ks <> [n] <> drop (i + 1) ks)
+  --     writeTVar k ks'
+  --     retain $ Suspend $ Free $ Orr ks' next
+  --   putMVar r (a, i)
 
-  (a, i) <- takeMVar r
+  -- (a, i) <- takeMVar r
+  
+  -- traverse killThread tids
+  -- ks <- atomically $ readTVar k
 
-  traverse killThread tids
+  -- runSuspend retain $ Suspend $ next (a, (take i ks <> drop (i + 1) ks))
+  where
+    go k r [] as = do
+      (a, i) <- takeMVar r
+      traverse uninterruptibleCancel as
+      ks <- atomically $ readTVar k
+      runSuspend retain $ Suspend $ next (a, (take i ks <> drop (i + 1) ks))
+    go k r ((s, i):xs) as = withAsync f $ \a -> go k r xs (a:as)
+      where
+        f = do
+          a <- flip runSuspend s $ \n -> do
+            ks <- readTVar k
+            let ks' = (take i ks <> [n] <> drop (i + 1) ks)
+            writeTVar k ks'
+            retain $ Suspend $ Free $ Orr ks' next
+          putMVar r (a, i)
 
-  ks <- atomically $ readTVar k
-
-  runSuspend retain $ Suspend $ next (a, (take i ks <> drop (i + 1) ks))
 runSuspend retain (Suspend (Free (Andd ss next))) = do
   rs <- traverse (const newEmptyMVar) ss
   k  <- newTVarIO ss
@@ -106,7 +117,6 @@ runSuspend retain (Suspend (Free (Andd ss next))) = do
   runSuspend retain $ Suspend (next as)
 
 testCont = do
-  k <- newCont
   c <- newTChanIO
 
   forkIO $ forever $ do
@@ -115,9 +125,17 @@ testCont = do
 
   v1 <- registerDelay 1000000
   v2 <- registerDelay 2000000
+  v3 <- registerDelay 1500000
 
-  (_, rs) <- runSuspend (const $ pure ()) $ orrSuspend [ dp v1 c "A", dp v2 c "B" ]
-  (_, rs) <- runSuspend (const $ pure ()) $ orrSuspend rs
+  (_, rs) <- runSuspend (const $ pure ()) $ do
+    (_, rs) <- orrSuspend
+      [ dp v3 c "V3"
+      , do
+          (_, rs) <- orrSuspend [ dp v1 c "A", dp v2 c "B" ]
+          (_, rs) <- orrSuspend rs
+          pure ()
+      ]
+    orrSuspend rs
 
   print $ length rs
 
