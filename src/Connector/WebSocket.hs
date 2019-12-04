@@ -126,15 +126,20 @@ testCont = do
   v1 <- registerDelay 1000000
   v2 <- registerDelay 2000000
   v3 <- registerDelay 1500000
+  v4 <- registerDelay 3000000
+  v5 <- registerDelay 2500000
 
   (_, rs) <- runSuspend (const $ pure ()) $ do
     (_, rs) <- orrSuspend
       [ dp v3 c "V3"
+      , dp v5 c "V5"
       , do
-          (_, rs) <- orrSuspend [ dp v1 c "A", dp v2 c "B" ]
+          (_, rs) <- orrSuspend [ dp v1 c "A", dp v2 c "B", dp v4 c "C" ]
+          (_, rs) <- orrSuspend rs
           (_, rs) <- orrSuspend rs
           pure ()
       ]
+    (_, rs) <- orrSuspend rs
     orrSuspend rs
 
   print $ length rs
