@@ -30,12 +30,15 @@ receive
   :: HTTP
   -> (Request -> (Response -> IO ResponseReceived) -> IO (ResponseReceived, a))
   -> Concur a
-receive (HTTP app) f = step $ do
-  v <- newEmptyTMVar
+receive (HTTP app) f = do
+  v <- step $ do
+    v <- newEmptyTMVar
 
-  writeTChan app $ \req respond -> do
-    (r, a) <- f req respond
-    atomically $ putTMVar v a
-    pure r
+    writeTChan app $ \req respond -> do
+      (r, a) <- f req respond
+      atomically $ putTMVar v a
+      pure r
 
-  readTMVar v
+    pure v
+
+  step $ readTMVar v
