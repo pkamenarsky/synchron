@@ -1,71 +1,73 @@
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TupleSections #-}
 
 module Lib where
 
 import Control.Applicative
-import Control.Monad
 import Control.Monad.Fail (MonadFail (fail))
-import qualified Control.Monad.Fail as F
 import Control.Monad.Free
-import Control.Monad.IO.Class
 
-import Control.Concurrent
-import Control.Concurrent.Async
 import Control.Concurrent.STM
-import Control.Concurrent.STM.TChan
 
-import Control.Monad.Trans.Cont
+import Data.Maybe (isJust)
 
-import Debug.Trace
+data ConcurF next
+  = forall a. Step (STM a) (a -> next)
+  | forall a. Orr [Concur a] ((a, [Concur a]) -> next)
+  | forall a. Andd [Concur a] ([a] -> next)
 
-newtype Concur a = Concur (ContT () IO a)
-  deriving (Functor, Applicative, Monad, MonadIO)
+deriving instance Functor ConcurF
 
-instance Alternative Concur where
-  empty = Concur $ ContT $ const $ pure ()
-  a <|> b = orr [a, b]
+newtype Concur a = Concur { getConcurF :: Free ConcurF a }
+  deriving (Functor, Applicative, Monad)
 
 instance MonadFail Concur where
-  fail e = Concur $ ContT $ const $ F.fail e
+  fail e = error e
 
-runConcur :: Concur () -> IO ()
-runConcur (Concur c) = runContT c pure
+instance Alternative Concur where
+  empty = step empty
+  a <|> b = fst <$> orr [a, b]
 
-orr :: [Concur a] -> Concur a
-orr [c] = c
-orr cs = Concur $ ContT $ \k -> do
-  var  <- newEmptyMVar
-  tids <- forM cs $ \(Concur c) -> forkIO $ runContT c (putMVar var)
+step :: STM a -> Concur a
+step io = Concur $ liftF (Step io id)
 
-  withMVar var $ \r -> do
-    forM_ tids killThread
-    k r
+orr :: [Concur a] -> Concur (a, [Concur a])
+orr ss = Concur $ liftF (Orr ss id)
 
 andd :: [Concur a] -> Concur [a]
-andd = undefined
+andd ss = Concur $ liftF (Andd ss id)
 
-receive :: Chan a -> Concur a
-receive = liftIO . readChan
-
-send :: Chan a -> a -> Concur ()
-send ch a = liftIO $ writeChan ch a
-
-someFunc :: IO ()
-someFunc = runConcur $ do
-  a <- orr [ Left <$> delay 1500000 "asd", Right <$> delay2 1000000 "cde" ]
-  liftIO $ traceIO $ show a
+runStep :: Concur a -> STM (Either a (Concur a))
+runStep (Concur (Pure a)) = pure (Left a)
+runStep (Concur (Free (Step step next))) = do
+  a <- step
+  pure (Right $ Concur $ next a)
+runStep (Concur (Free (Orr ss next))) = do
+  (i, a) <- foldr (<|>) empty [ (i,) <$> runStep s | (s, i) <- zip ss [0..] ]
+  case a of
+    Left a   -> pure (Right $ Concur $ next (a, take i ss <> drop (i + 1) ss))
+    Right s' -> pure (Right $ Concur $ Free $ Orr (take i ss <> [s'] <> drop (i + 1) ss) next)
+runStep (Concur (Free (Andd ss next))) = do
+  case traverse done ss of
+    Just as -> pure (Right $ Concur $ next as)
+    Nothing -> do
+      (i, a) <- foldr (<|>) empty
+        [ (i,) <$> runStep (if isJust (done s) then empty else s)
+        | (s, i) <- zip ss [0..]
+        ]
+      case a of
+        Left a'  -> pure (Right $ Concur $ Free $ Andd (take i ss <> [Concur $ Pure a'] <> drop (i + 1) ss) next)
+        Right s' -> pure (Right $ Concur $ Free $ Andd (take i ss <> [s'] <> drop (i + 1) ss) next)
   where
-    delay n a = do
-      liftIO $ traceIO "Before"
-      liftIO $ threadDelay n
-      liftIO $ traceIO "After"
-      pure a
+    done (Concur (Pure a)) = Just a
+    done _ = Nothing
 
-    delay2 n a = do
-      liftIO $ traceIO "Before2 1"
-      liftIO $ threadDelay n
-      liftIO $ traceIO "After2 1"
-      liftIO $ traceIO "Before2 2"
-      liftIO $ threadDelay n
-      liftIO $ traceIO "After2 2"
-      pure a
+runConcur :: Concur a -> IO a
+runConcur s = do
+  s' <- atomically $ runStep s
+  case s' of
+    Left a    -> pure a
+    Right s'' -> runConcur s''
