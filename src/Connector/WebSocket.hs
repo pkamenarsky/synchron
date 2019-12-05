@@ -4,6 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TupleSections #-}
 
 module Connector.WebSocket where
 
@@ -20,7 +21,7 @@ import Control.Monad.Free
 import Control.Monad.IO.Class
 
 import Data.IORef
-import Data.Maybe (fromMaybe)
+import Data.Maybe (isJust, fromMaybe)
 
 import Network.HTTP.Types
 
@@ -46,6 +47,10 @@ newtype Suspend a = Suspend { getSuspendF :: Free SuspendF a }
 instance MonadFail Suspend where
   fail e = error e
 
+instance Alternative Suspend where
+  empty = step empty
+  a <|> b = fst <$> orrSuspend [a, b]
+
 step :: STM a -> Suspend a
 step io = Suspend $ liftF (Step io id)
 
@@ -54,6 +59,38 @@ orrSuspend ss = Suspend $ liftF (Orr ss id)
 
 anddSuspend :: [Suspend a] -> Suspend [a]
 anddSuspend ss = Suspend $ liftF (Andd ss id)
+
+runStep :: Suspend a -> STM (Either a (Suspend a))
+runStep (Suspend (Pure a)) = pure (Left a)
+runStep (Suspend (Free (Step step next))) = do
+  a <- step
+  pure (Right $ Suspend $ next a)
+runStep (Suspend (Free (Orr ss next))) = do
+  (i, a) <- foldr (<|>) empty [ (i,) <$> runStep s | (s, i) <- zip ss [0..] ]
+  case a of
+    Left a   -> pure (Right $ Suspend $ next (a, take i ss <> drop (i + 1) ss))
+    Right s' -> pure (Right $ Suspend $ Free $ Orr (take i ss <> [s'] <> drop (i + 1) ss) next)
+runStep (Suspend (Free (Andd ss next))) = do
+  case traverse done ss of
+    Just as -> pure (Right $ Suspend $ next as)
+    Nothing -> do
+      (i, a) <- foldr (<|>) empty
+        [ (i,) <$> runStep (if isJust (done s) then empty else s)
+        | (s, i) <- zip ss [0..]
+        ]
+      case a of
+        Left a'  -> pure (Right $ Suspend $ Free $ Andd (take i ss <> [Suspend $ Pure a'] <> drop (i + 1) ss) next)
+        Right s' -> pure (Right $ Suspend $ Free $ Andd (take i ss <> [s'] <> drop (i + 1) ss) next)
+  where
+    done (Suspend (Pure a)) = Just a
+    done _ = Nothing
+
+runAll :: Suspend a -> IO a
+runAll s = do
+  s' <- atomically $ runStep s
+  case s' of
+    Left a    -> pure a
+    Right s'' -> runAll s''
 
 runSuspend :: (Suspend a -> STM ()) -> Suspend a -> IO a
 runSuspend retain (Suspend (Pure a)) = do
@@ -129,7 +166,7 @@ testCont = do
   v4 <- registerDelay 3000000
   v5 <- registerDelay 2500000
 
-  (_, rs) <- runSuspend (const $ pure ()) $ do
+  (_, rs) <- runAll $ do
     (_, rs) <- orrSuspend
       [ dp v3 c "V3"
       , dp v5 c "V5"
