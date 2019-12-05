@@ -87,7 +87,7 @@ websocket
   -> (forall s. WebSocketServer s -> IO ())
   -> IO ()
 websocket port options k = do
-  ch     <- newTChanIO
+  ch <- newTChanIO
 
   withAsync (go ch) $ \as -> do
     k $ WebSocketServer ch
@@ -149,14 +149,19 @@ send (WebSocket v) m = step $ do
 
 test :: IO ()
 test = do
-  websocket 6666 defaultConnectionOptions $ \wss -> do
-  websocket 6667 defaultConnectionOptions $ \wss2 -> do
+  websocket 3922 defaultConnectionOptions $ \wss -> do
+  websocket 3923 defaultConnectionOptions $ \wss2 -> do
   logger $ \log -> do
-    runConcur $ do
-      [ws, ws2] <- andd [ accept wss, accept wss2 ]
-      go log ws ws2
+    runConcur $ server log wss wss2 []
 
     where
+      server log wss wss2 conns = do
+        (r, ks) <- orr $ concat [ [ Left <$> andd [ accept wss, accept wss2 ] ], conns ]
+        case r of
+          Left [ws, ws2] -> server log wss wss2 (go log ws ws2:ks)
+          Right _        -> server log wss wss2 ks
+        
+        
       go log ws ws2 = do
         (r, _) <- orr
           [ Left  <$> Connector.WebSocket.receive ws
