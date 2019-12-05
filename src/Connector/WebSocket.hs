@@ -36,48 +36,6 @@ import Network.WebSockets.Connection
 
 import Debug.Trace
 
-testConcur = do
-  c <- newTChanIO
-
-  forkIO $ forever $ do
-    a <- atomically $ readTChan c
-    traceIO a
-
-  v1 <- registerDelay 1000000
-  v2 <- registerDelay 2000000
-  v3 <- registerDelay 1500000
-  v4 <- registerDelay 3000000
-  v5 <- registerDelay 2500000
-
-  (_, rs) <- runConcur $ do
-    (_, rs) <- orr
-      [ dp v3 c "V3"
-      , dp v5 c "V5"
-      , do
-          (_, rs) <- orr [ dp v1 c "A", dp v2 c "B", dp v4 c "C" ]
-          (_, rs) <- orr rs
-          (_, rs) <- orr rs
-          pure ()
-      ]
-    (_, rs) <- orr rs
-    orr rs
-
-  print $ length rs
-
-  where
-    dp v c s = do
-      step $ writeTChan c ("BEFORE: " <> s)
-      step $ do
-        v' <- readTVar v
-        check v'
-      step $ writeTChan c ("AFTER: " <> s)
-
-    f c n = do
-      step $ writeTChan c (show n)
-      f c (n + 1)
-
---------------------------------------------------------------------------------
-
 data WebSocketServer s = WebSocketServer (TChan WebSocket)
 
 newtype WebSocket = WebSocket (TVar (Maybe (TChan DataMessage, TChan DataMessage)))
