@@ -103,6 +103,8 @@ websocket port options k = do
       inCh  <- newTChanIO
       outCh <- newTChanIO
 
+      forkPingThread conn 30
+
       let inA = forever $ do
             r <- receiveDataMessage conn
             atomically $ writeTChan inCh r
