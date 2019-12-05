@@ -6,7 +6,7 @@ import Control.Concurrent.STM.TChan
 
 import Control.Monad (forever)
 
-import Lib
+import Concur
 
 import Debug.Trace (traceIO)
 

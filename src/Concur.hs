@@ -4,7 +4,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TupleSections #-}
 
-module Lib where
+module Concur where
 
 import Control.Applicative
 import Control.Monad.Fail (MonadFail (fail))
@@ -71,3 +71,11 @@ runConcur s = do
   case s' of
     Left a    -> pure a
     Right s'' -> runConcur s''
+
+--------------------------------------------------------------------------------
+
+loopOrr :: [Concur a] -> (a -> Concur [Concur a]) -> Concur x
+loopOrr st f = do
+  (a, st') <- orr st
+  st'' <- f a
+  loopOrr (st' <> st'') f

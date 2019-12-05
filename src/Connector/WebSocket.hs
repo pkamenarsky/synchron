@@ -8,7 +8,7 @@
 
 module Connector.WebSocket where
 
-import Lib (Concur, runConcur, orr, andd, step)
+import Concur (Concur, runConcur, orr, andd, step)
 import Connector.Log
 
 import Control.Applicative
@@ -145,51 +145,3 @@ send (WebSocket v) m = step $ do
       writeTChan outCh m
       pure True
     Nothing -> pure False
-
---------------------------------------------------------------------------------
-
-loopOrr :: [Concur a] -> (a -> Concur [Concur a]) -> Concur x
-loopOrr st f = do
-  (a, st') <- orr st
-  st'' <- f a
-  loopOrr (st' <> st'') f
-
-test :: IO ()
-test = do
-  websocket 3922 defaultConnectionOptions $ \wss -> do
-  websocket 3923 defaultConnectionOptions $ \wss2 -> do
-  logger $ \log -> do
-    runConcur $ server' log wss wss2
-
-    where
-      server' log wss wss2
-        = loopOrr [ Left <$> andd [ accept wss, accept wss2 ] ] $ \r -> do
-            case r of
-              Left [ws, ws2] -> pure
-                [ Left  <$> andd [ accept wss, accept wss2 ]  -- restart accept
-                , Right <$> go log ws ws2                     -- add new connection
-                ]
-              Right _ -> pure []
-
-      server log wss wss2 conns = do
-        log ("LENGTH: " <> show (length conns))
-        (r, ks) <- orr conns
-        case r of
-          Left [ws, ws2] -> server log wss wss2 $ concat
-            [ [ Left  <$> andd [ accept wss, accept wss2 ] ]  -- restart accept
-            , [ Right <$> go log ws ws2 ]                     -- add new connection
-            , ks                                              -- keep rest of connections
-            ]
-          Right _        -> server log wss wss2 ks
-        
-        
-      go log ws ws2 = do
-        (r, _) <- orr
-          [ fmap Left  <$> Connector.WebSocket.receive ws
-          , fmap Right <$> Connector.WebSocket.receive ws2
-          ]
-        case r of
-          Nothing  -> pure ()
-          _  -> do
-            log $ show r
-            go log ws ws2

@@ -1,6 +1,6 @@
 module Connector.HTTP where
 
-import Lib
+import Concur
 
 import Control.Concurrent
 import Control.Concurrent.Async
