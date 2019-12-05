@@ -16,13 +16,14 @@ import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TChan
+import Control.Exception
 import Control.Monad
 import Control.Monad.Fail
 import Control.Monad.Free
 import Control.Monad.IO.Class
 
 import Data.IORef
-import Data.Maybe (isJust, fromMaybe)
+import Data.Maybe (catMaybes, isJust, fromMaybe)
 
 import Network.HTTP.Types
 
@@ -118,7 +119,7 @@ websocket port options k = do
         mkWeakTVar ws $ do
           cancel a
           cancel b
-        waitEither a b
+        waitEitherCatchCancel a b
 
       atomically $ writeTVar ws Nothing
 
@@ -147,25 +148,48 @@ send (WebSocket v) m = step $ do
 
 --------------------------------------------------------------------------------
 
+loopOrr :: [Concur a] -> (a -> Concur [Concur a]) -> Concur x
+loopOrr st f = do
+  (a, st') <- orr st
+  st'' <- f a
+  loopOrr (st' <> st'') f
+
 test :: IO ()
 test = do
   websocket 3922 defaultConnectionOptions $ \wss -> do
   websocket 3923 defaultConnectionOptions $ \wss2 -> do
   logger $ \log -> do
-    runConcur $ server log wss wss2 []
+    runConcur $ server' log wss wss2
 
     where
+      server' log wss wss2
+        = loopOrr [ Left <$> andd [ accept wss, accept wss2 ] ] $ \r -> do
+            case r of
+              Left [ws, ws2] -> pure
+                [ Left  <$> andd [ accept wss, accept wss2 ]  -- restart accept
+                , Right <$> go log ws ws2                     -- add new connection
+                ]
+              Right _ -> pure []
+
       server log wss wss2 conns = do
-        (r, ks) <- orr $ concat [ [ Left <$> andd [ accept wss, accept wss2 ] ], conns ]
+        log ("LENGTH: " <> show (length conns))
+        (r, ks) <- orr conns
         case r of
-          Left [ws, ws2] -> server log wss wss2 (go log ws ws2:ks)
+          Left [ws, ws2] -> server log wss wss2 $ concat
+            [ [ Left  <$> andd [ accept wss, accept wss2 ] ]  -- restart accept
+            , [ Right <$> go log ws ws2 ]                     -- add new connection
+            , ks                                              -- keep rest of connections
+            ]
           Right _        -> server log wss wss2 ks
         
         
       go log ws ws2 = do
         (r, _) <- orr
-          [ Left  <$> Connector.WebSocket.receive ws
-          , Right <$> Connector.WebSocket.receive ws2
+          [ fmap Left  <$> Connector.WebSocket.receive ws
+          , fmap Right <$> Connector.WebSocket.receive ws2
           ]
-        log $ show r
-        go log ws ws2
+        case r of
+          Nothing  -> pure ()
+          _  -> do
+            log $ show r
+            go log ws ws2
