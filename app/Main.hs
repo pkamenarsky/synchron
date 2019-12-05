@@ -73,7 +73,7 @@ testConnectors = do
             case r of
               Left [ws, ws2] -> pure
                 [ Left  <$> andd [ WS.accept wss, WS.accept wss2 ]  -- restart accept
-                , Right <$> go log ws ws2                     -- add new connection
+                , Right <$> go log ws ws2                           -- add new connection
                 ]
               Right _ -> pure []
 
@@ -83,8 +83,8 @@ testConnectors = do
         case r of
           Left [ws, ws2] -> server log wss wss2 $ concat
             [ [ Left  <$> andd [ WS.accept wss, WS.accept wss2 ] ]  -- restart accept
-            , [ Right <$> go log ws ws2 ]                     -- add new connection
-            , ks                                              -- keep rest of connections
+            , [ Right <$> go log ws ws2 ]                           -- add new connection
+            , ks                                                    -- keep rest of connections
             ]
           Right _        -> server log wss wss2 ks
         
