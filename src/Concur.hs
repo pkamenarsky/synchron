@@ -101,16 +101,19 @@ spawn (Pool ch) k = step (writeTChan ch k)
 
 --------------------------------------------------------------------------------
 
-newtype Signal a = Signal (TChan a)
+data In
+data Out
 
-newSignal :: Concur (Signal a)
+newtype Signal t a = Signal (TChan a)
+
+newSignal :: Concur (Signal In a)
 newSignal = Signal <$> step newBroadcastTChan
 
-emit :: Signal a -> a -> Concur ()
+emit :: Signal In a -> a -> Concur ()
 emit (Signal ch) a = step $ writeTChan ch a
 
-await :: Signal a -> Concur a
-await (Signal ch) = do
-  ch' <- step $ dupTChan ch
-  step $ readTChan ch'
+dupSignal :: Signal In a -> Concur (Signal Out a)
+dupSignal (Signal ch) = Signal <$> step (dupTChan ch)
 
+await :: Signal Out a -> Concur a
+await (Signal ch) = step $ readTChan ch
