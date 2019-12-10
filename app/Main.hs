@@ -85,5 +85,13 @@ testConnectors = do
             log $ show r
             go log ws ws2
 
+testSignals :: IO ()
+testSignals = Log.logger $ \log -> runConcur $ do
+  s  <- newSignal
+  bs <- dupSignal s
+  emit s 5
+  b <- await bs
+  log $ show b
+
 main :: IO ()
-main = pure ()
+main = testSignals
