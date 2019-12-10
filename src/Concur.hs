@@ -98,3 +98,19 @@ withPool k = do
 
 spawn :: Pool s -> Concur () -> Concur ()
 spawn (Pool ch) k = step (writeTChan ch k)
+
+--------------------------------------------------------------------------------
+
+newtype Signal a = Signal (TChan a)
+
+newSignal :: Concur (Signal a)
+newSignal = Signal <$> step newBroadcastTChan
+
+emit :: Signal a -> a -> Concur ()
+emit (Signal ch) a = step $ writeTChan ch a
+
+await :: Signal a -> Concur a
+await (Signal ch) = do
+  ch' <- step $ dupTChan ch
+  step $ readTChan ch'
+
