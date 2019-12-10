@@ -13,7 +13,7 @@ import Control.Monad.Free
 
 import Control.Concurrent.STM
 
-import Data.Maybe (isJust)
+import Data.Maybe (catMaybes, isJust)
 
 data ConcurF next
   = forall a. Step (STM a) (a -> next)
@@ -50,10 +50,13 @@ runStep (Concur (Free (Step step next))) = do
   a <- step
   pure (Right $ Concur $ next a)
 runStep (Concur (Free (Orr ss next))) = do
-  (i, a) <- foldr (<|>) empty [ (i,) <$> runStep s | (s, i) <- zip ss [0..] ]
-  case a of
-    Left a   -> pure (Right $ Concur $ next (a, take i ss <> drop (i + 1) ss))
-    Right s' -> pure (Right $ Concur $ Free $ Orr (take i ss <> [s'] <> drop (i + 1) ss) next)
+  case catMaybes [ (i,) <$> done s | (s, i) <- zip ss [0..] ] of
+    [] -> do
+      (i, a) <- foldr (<|>) empty [ (i,) <$> runStep s | (s, i) <- zip ss [0..] ]
+      case a of
+        Left a   -> pure (Right $ Concur $ next (a, take i ss <> drop (i + 1) ss))
+        Right s' -> pure (Right $ Concur $ Free $ Orr (take i ss <> [s'] <> drop (i + 1) ss) next)
+    ((i, a):_) -> pure (Right $ Concur $ next (a, take i ss <> drop (i + 1) ss))
 runStep (Concur (Free (Andd ss next))) = do
   case traverse done ss of
     Just as -> pure (Right $ Concur $ next as)
@@ -65,9 +68,10 @@ runStep (Concur (Free (Andd ss next))) = do
       case a of
         Left a'  -> pure (Right $ Concur $ Free $ Andd (take i ss <> [Concur $ Pure a'] <> drop (i + 1) ss) next)
         Right s' -> pure (Right $ Concur $ Free $ Andd (take i ss <> [s'] <> drop (i + 1) ss) next)
-  where
-    done (Concur (Pure a)) = Just a
-    done _ = Nothing
+
+done :: Concur a -> Maybe a
+done (Concur (Pure a)) = Just a
+done _ = Nothing
 
 runConcur :: Concur a -> IO a
 runConcur s = do
