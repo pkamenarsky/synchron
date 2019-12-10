@@ -17,7 +17,7 @@ import Control.Concurrent.STM
 
 import Data.Maybe (isJust)
 
-data Pool s = Pool (TChan (Concur ()))
+data Pool s = Pool (TChan (Concur ())) (TVar [Async ()])
 
 data ConcurF next
   = forall a. Step (STM a) (a -> next)
@@ -49,42 +49,51 @@ andd ss = Concur $ liftF (Andd ss id)
 withPool :: (forall s. Pool s -> Concur a) -> Concur a
 withPool k = Concur $ liftF (WithPool k id)
 
-runStep :: Concur a -> IO (Either a (Concur a))
+runStep :: Concur a -> STM (Either a (Maybe (Pool s), Concur a))
 runStep (Concur (Pure a)) = pure (Left a)
 runStep (Concur (Free (Step step next))) = do
-  a <- atomically step
-  pure (Right $ Concur $ next a)
+  a <- step
+  pure (Right (Nothing, Concur $ next a))
 runStep (Concur (Free (Orr ss next))) = do
   (i, a) <- foldr (<|>) empty [ (i,) <$> runStep s | (s, i) <- zip ss [0..] ]
   case a of
-    Left a   -> pure (Right $ Concur $ next a)
-    Right s' -> pure (Right $ Concur $ Free $ Orr (take i ss <> [s'] <> drop (i + 1) ss) next)
+    Left a   -> pure (Right (Nothing, Concur $ next a))
+    Right s' -> undefined -- pure (Right (Nothing, Concur $ Free $ Orr (take i ss <> [s'] <> drop (i + 1) ss) next))
 runStep (Concur (Free (Andd ss next))) = do
   case traverse done ss of
-    Just as -> pure (Right $ Concur $ next as)
+    Just as -> pure (Right (Nothing, Concur $ next as))
     Nothing -> do
       (i, a) <- foldr (<|>) empty
         [ (i,) <$> runStep (if isJust (done s) then empty else s)
         | (s, i) <- zip ss [0..]
         ]
       case a of
-        Left a'  -> pure (Right $ Concur $ Free $ Andd (take i ss <> [Concur $ Pure a'] <> drop (i + 1) ss) next)
-        Right s' -> pure (Right $ Concur $ Free $ Andd (take i ss <> [s'] <> drop (i + 1) ss) next)
+        Left a'  -> undefined -- pure (Right $ Concur $ Free $ Andd (take i ss <> [Concur $ Pure a'] <> drop (i + 1) ss) next)
+        Right s' -> undefined -- pure (Right $ Concur $ Free $ Andd (take i ss <> [s'] <> drop (i + 1) ss) next)
   where
     done (Concur (Pure a)) = Just a
     done _ = Nothing
 runStep (Concur (Free (WithPool k next))) = do
-  ch <- newTChanIO
-  as <- async $ forever $ do
-    trail <- atomically $ readTChan ch
-    undefined
-  a  <- runConcur (k $ Pool ch)
-  cancel as
-  pure (Right $ Concur $ next a)
+  ch <- newTChan
+  as <- newTVar []
+  -- as <- async $ forever $ do
+  --   trail <- atomically $ readTChan ch
+  --   tas   <- async $ runConcur trail
+  --   undefined
+  let pool = Pool ch as
+  pure $ Right (Just pool, go next (k pool))
+  where
+    go next s = do
+      s' <- step $ runStep s
+      case s' of
+        Left a    -> do
+          -- kill all threads
+          Concur (next a)
+        Right (_, s'') -> go next s''
 
 runConcur :: Concur a -> IO a
 runConcur s = do
-  s' <- runStep s
+  s' <- atomically $ runStep s
   case s' of
     Left a    -> pure a
     Right s'' -> runConcur s''
