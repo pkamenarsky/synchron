@@ -2,6 +2,7 @@
 
 module Main where
 
+import Control.Applicative
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TChan
 
@@ -87,11 +88,18 @@ testConnectors = do
 
 testSignals :: IO ()
 testSignals = Log.logger $ \log -> runConcur $ do
-  s  <- newSignal
+  s  <- newSignal :: Concur (Signal In Int)
   bs <- dupSignal s
-  emit s 5
-  b <- await bs
+  b  <- andd [ Left <$> emit s 5, Right <$> await bs ]
+
   log $ show b
 
 main :: IO ()
 main = testSignals
+
+main' :: IO ()
+main' = do
+  s  <- newTChanIO
+  s' <- atomically $ dupTChan s
+  a  <- atomically $ foldr (<|>) retry [ fmap Right (readTChan s'), fmap Left (writeTChan s 5) ]
+  print a
