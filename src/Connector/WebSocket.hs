@@ -75,11 +75,11 @@ websocket port options k = do
       atomically $ writeTChan ch (WebSocket ws)
 
       withAsync inA $ \a -> do
-      withAsync inB $ \b -> do
-        mkWeakTVar ws $ do
-          cancel a
-          cancel b
-        waitEitherCatchCancel a b
+        withAsync inB $ \b -> do
+          mkWeakTVar ws $ do
+            cancel a
+            cancel b
+          waitEitherCatchCancel a b
 
       atomically $ writeTVar ws Nothing
 

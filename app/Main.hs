@@ -55,12 +55,12 @@ testConcur = Log.logger $ \log -> do
 
 testConnectors :: IO ()
 testConnectors = do
-  HTTP.http 3921 $ \http -> do
-  WS.websocket 3922 defaultConnectionOptions $ \wss -> do
-  WS.websocket 3923 defaultConnectionOptions $ \wss2 -> do
-  Log.logger $ \log -> do
+  HTTP.http 3921 $ \http ->
+    WS.websocket 3922 defaultConnectionOptions $ \wss ->
+    WS.websocket 3923 defaultConnectionOptions $ \wss2 ->
+    Log.logger $ \log -> do
 
-    runConcur $ auth http log wss wss2
+      runConcur $ auth http log wss wss2
 
     where
       auth http log wss wss2 = do
