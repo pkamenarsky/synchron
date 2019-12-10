@@ -5,6 +5,8 @@ module Main where
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TChan
 
+import Control.Monad (forever)
+
 import qualified Connector.WebSocket as WS
 
 import qualified Connector.Log as Log
@@ -25,17 +27,17 @@ testConcur = Log.logger $ \log -> do
   v5 <- registerDelay 2500000
 
   (_, rs) <- runConcur $ do
-    (_, rs) <- orr
+    (_, rs) <- orr'
       [ dp log v3 "V3"
       , dp log v5 "V5"
       , do
-          (_, rs) <- orr [ dp log v1 "A", dp log v2 "B", dp log v4 "C" ]
-          (_, rs) <- orr rs
-          (_, rs) <- orr rs
+          (_, rs) <- orr' [ dp log v1 "A", dp log v2 "B", dp log v4 "C" ]
+          (_, rs) <- orr' rs
+          (_, rs) <- orr' rs
           pure ()
       ]
-    (_, rs) <- orr rs
-    orr rs
+    (_, rs) <- orr' rs
+    orr' rs
 
   print $ length rs
 
@@ -66,31 +68,14 @@ testConnectors = do
           r <- respond $ responseLBS status200 [] "Hello World"
           pure (r, "good")
         log r
-        server' log wss wss2
+        server log wss wss2
       
-      server' log wss wss2
-        = loopOrr [ Left <$> andd [ WS.accept wss, WS.accept wss2 ] ] $ \r -> do
-            case r of
-              Left [ws, ws2] -> pure
-                [ Left  <$> andd [ WS.accept wss, WS.accept wss2 ]  -- restart accept
-                , Right <$> go log ws ws2                           -- add new connection
-                ]
-              Right _ -> pure []
-
-      server log wss wss2 conns = do
-        log ("LENGTH: " <> show (length conns))
-        (r, ks) <- orr conns
-        case r of
-          Left [ws, ws2] -> server log wss wss2 $ concat
-            [ [ Left  <$> andd [ WS.accept wss, WS.accept wss2 ] ]  -- restart accept
-            , [ Right <$> go log ws ws2 ]                           -- add new connection
-            , ks                                                    -- keep rest of connections
-            ]
-          Right _        -> server log wss wss2 ks
-        
+      server log wss wss2 = withPool $ \pool -> forever $ do
+        [ws, ws2] <- andd [ WS.accept wss, WS.accept wss2 ]
+        spawn pool (go log ws ws2)
         
       go log ws ws2 = do
-        (r, _) <- orr
+        r <- orr
           [ fmap Left  <$> WS.receive ws
           , fmap Right <$> WS.receive ws2
           ]

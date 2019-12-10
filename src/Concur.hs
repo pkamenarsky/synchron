@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TupleSections #-}
 
@@ -29,13 +30,16 @@ instance MonadFail Concur where
 
 instance Alternative Concur where
   empty = step empty
-  a <|> b = fst <$> orr [a, b]
+  a <|> b = orr [a, b]
 
 step :: STM a -> Concur a
 step io = Concur $ liftF (Step io id)
 
-orr :: [Concur a] -> Concur (a, [Concur a])
-orr ss = Concur $ liftF (Orr ss id)
+orr :: [Concur a] -> Concur a
+orr ss = fmap fst $ Concur $ liftF (Orr ss id)
+
+orr' :: [Concur a] -> Concur (a, [Concur a])
+orr' ss = Concur $ liftF (Orr ss id)
 
 andd :: [Concur a] -> Concur [a]
 andd ss = Concur $ liftF (Andd ss id)
@@ -74,8 +78,23 @@ runConcur s = do
 
 --------------------------------------------------------------------------------
 
-loopOrr :: [Concur a] -> (a -> Concur [Concur a]) -> Concur x
-loopOrr st f = do
-  (a, st') <- orr st
-  st'' <- f a
-  loopOrr (st' <> st'') f
+newtype Pool s = Pool (TChan (Concur ()))
+
+withPool :: (forall s. Pool s -> Concur a) -> Concur a
+withPool k = do
+  ch <- step newTChan
+  go ch [ (Right . Left) <$> k (Pool ch) ]
+  where
+    go ch trails = do
+      (a, ks) <- orr' trails
+      case a of
+        Left trail -> go ch $ concat
+          [ [ Left <$> step (readTChan ch) ]
+          , [ (Right . Right) <$> trail ]
+          , ks
+          ]
+        Right (Left a)  -> pure a
+        Right (Right _) -> go ch ks
+
+spawn :: Pool s -> Concur () -> Concur ()
+spawn (Pool ch) k = step (writeTChan ch k)
