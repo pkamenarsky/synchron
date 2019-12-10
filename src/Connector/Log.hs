@@ -12,13 +12,19 @@ import Debug.Trace (traceIO)
 
 logger :: ((String -> Concur ()) -> IO ()) -> IO ()
 logger k = do
-  ch <- newTChanIO
+  ch   <- newTChanIO
+  done <- newEmptyTMVarIO
 
-  withAsync (go ch) $ \as -> do
+  withAsync (go ch done) $ \as -> do
     k (step . writeTChan ch)
-    cancel as
+    atomically $ putTMVar done ()
+    wait as
 
   where
-    go ch = forever $ do
-      t <- atomically $ readTChan ch
-      traceIO t
+    go ch done = do
+      r <- atomically $ fmap Left (readTChan ch) `orElse` fmap Right (readTMVar done)
+      case r of
+        Left r' -> do
+          traceIO r'
+          go ch done
+        Right _ -> pure ()
