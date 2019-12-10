@@ -88,18 +88,11 @@ testConnectors = do
 
 testSignals :: IO ()
 testSignals = Log.logger $ \log -> runConcur $ do
-  s  <- newSignal :: Concur (Signal In Int)
+  s  <- newSignal
   bs <- dupSignal s
-  b  <- andd [ Left <$> emit s 5, Right <$> await bs ]
+  b  <- orr [ Right <$> await bs, Left <$> emit s 5 ]
 
   log $ show b
 
 main :: IO ()
 main = testSignals
-
-main' :: IO ()
-main' = do
-  s  <- newTChanIO
-  s' <- atomically $ dupTChan s
-  a  <- atomically $ foldr (<|>) retry [ fmap Right (readTChan s'), fmap Left (writeTChan s 5) ]
-  print a
