@@ -8,7 +8,7 @@
 
 module Connector.WebSocket where
 
-import Concur (Concur, runConcur, orr, andd, step)
+import Concur
 import Connector.Log
 
 import Control.Applicative
