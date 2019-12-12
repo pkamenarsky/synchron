@@ -121,3 +121,9 @@ dupSignal (Signal ch) = Signal <$> step (dupTChan ch)
 
 await :: Signal Out a -> Concur a
 await (Signal ch) = step $ readTChan ch
+
+--------------------------------------------------------------------------------
+
+testMult = do
+  a <- newTVar 5
+  undefined

@@ -90,7 +90,9 @@ testSignals :: IO ()
 testSignals = Log.logger $ \log -> runConcur $ do
   s  <- newSignal
   bs <- dupSignal s
-  b  <- orr [ Right <$> await bs, Left <$> emit s 5 ]
+  emit s 5
+  emit s 6
+  b  <- andd [ Right <$> await bs, Left <$> await bs ]
 
   log $ show b
 
