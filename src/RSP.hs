@@ -123,6 +123,22 @@ run rsp = Context <$> newMVar (Just rsp)
 
 --------------------------------------------------------------------------------
 
+many :: RSP (Either a [RSP ()]) -> RSP a
+many k = do
+  go [ Left <$> k ]
+  where
+    go ks = do
+      a <- orr ks
+      undefined
+
+done :: a -> RSP (Either a [RSP ()])
+done a = pure (Left a)
+
+spawn :: RSP () -> RSP (Either a [RSP ()])
+spawn k = pure (Right [k])
+
+--------------------------------------------------------------------------------
+
 testRSP :: RSP ()
 testRSP = undefined
 
