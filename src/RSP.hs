@@ -13,6 +13,9 @@ import Data.IORef
 
 import Unsafe.Coerce (unsafeCoerce)
 
+import Debug.Trace
+
+
 newtype Context = Context (MVar (Maybe (RSP ())))
 
 newtype Event a = Event (IORef (Maybe a))
@@ -41,7 +44,7 @@ emit (Context ctx) e@(Event event) a = do
 --------------------------------------------------------------------------------
 
 data RSPF next
-  = forall a. Step (IO a) (a -> next)
+  = Async (IO ()) next
   | forall a. Await (Event a) (a -> next)
   | forall a. Or [RSP a] ((a, [RSP a]) -> next)
   | forall a. And [RSP a] ([a] -> next)
@@ -51,8 +54,8 @@ deriving instance Functor RSPF
 newtype RSP a = RSP { getRSP :: Free RSPF a }
   deriving (Functor, Applicative, Monad)
 
-step :: IO a -> RSP a
-step io = RSP $ liftF (Step io id)
+async :: IO () -> RSP ()
+async io = RSP $ liftF (Async io ())
 
 await :: Event a -> RSP a
 await e = RSP $ liftF (Await e id)
@@ -70,9 +73,9 @@ sameReference = unsafeCoerce ((==) :: IORef a -> IORef a -> Bool)
 
 runRSP :: Event b -> RSP a -> IO (Either a (Either (RSP a) (RSP a)))
 runRSP _ (RSP (Pure a)) = pure (Left a)
-runRSP e (RSP (Free (Step io next))) = do
-  a <- io
-  runRSP e (RSP $ next a)
+runRSP e (RSP (Free (Async io next))) = do
+  forkIO io
+  runRSP e (RSP next)
 runRSP (Event currentEvent) rsp@(RSP (Free (Await (Event event) next))) = do
   if sameReference currentEvent event
     then do
@@ -135,6 +138,12 @@ server app = do
 
 m = server $ \x -> server $ \y -> server $ \z -> run $ do
   a <- andd [ await x, await y, await z ]
-  step $ print a
-  a <- andd [ await x, await y, await z ]
-  step $ print a
+  async $ traceIO $ show a
+  a <- fst <$> orr [ await x, await y, await z ]
+  async $ traceIO a
+
+m2 = server $ \x -> server $ \y -> server $ \z -> run $ do
+  a <- andd [ await x, await x, await x ]
+  async $ traceIO $ show a
+  a <- andd [ await x, await x, await x ]
+  async $ traceIO $ show a
