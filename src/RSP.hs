@@ -59,12 +59,6 @@ data VEvent = forall a. VEvent (IEvent a) a
 data RSPF next
   = Async (IO ()) next
 
-  -- | Hole
-
-  | forall a. Local (IEvent a -> RSP ()) next
-  | forall a. EmitI (IEvent a) a next
-  | forall a. AwaitI (IEvent a) (a -> next)
-
   | forall a. Await (Event a) (a -> next)
   | forall a. Or [RSP a] ((a, [RSP a]) -> next)
   | forall a. And [RSP a] ([a] -> next)
@@ -76,15 +70,6 @@ newtype RSP a = RSP { getRSP :: Free RSPF a }
 
 async :: IO () -> RSP ()
 async io = RSP $ liftF (Async io ())
-
-local :: (IEvent a -> RSP ()) -> RSP ()
-local f = RSP $ liftF (Local f ())
-
-emitI :: IEvent a -> a -> RSP ()
-emitI e a = RSP $ liftF (EmitI e a ())
-
-awaitI :: IEvent a -> RSP a
-awaitI e = RSP $ liftF (AwaitI e id)
 
 await :: Event a -> RSP a
 await e = RSP $ liftF (Await e id)
@@ -156,28 +141,6 @@ runRSP (Right (Event currentEvent)) rsp@(RSP (Free (Await (Event event) next))) 
       pure (Blocked rsp)
 runRSP _ rsp@(RSP (Free (Await _ _))) = pure (Blocked rsp)
 
--- Local
-runRSP _ (RSP (Free (Local f next))) = do
-  eid <- atomicModifyIORef' nextId $ \i -> (i + 1, i)
-  pure $ Next $ do
-    f (IEvent eid)
-    RSP next
-
--- IEmit
-runRSP _ (RSP (Free (EmitI e a next))) = do
-  traceIO "EMITI"
-  pure $ Cont e a $ \_ -> RSP next
-
--- IAwait
-runRSP (Left (VEvent (IEvent e) a)) rsp@(RSP (Free (AwaitI (IEvent event) next))) = do
-  traceIO "AWAITI"
-  if e == event
-    then do
-      traceIO "AWAITI SAME"
-      pure (Next $ RSP (next $ unsafeCoerce a))
-    else pure (Blocked rsp)
-runRSP _ rsp@(RSP (Free (AwaitI _ _))) = pure (Blocked rsp)
-
 -- Or
 runRSP e (RSP (Free (Or rsps next))) = do
   as <- traverse (runRSP e) rsps
@@ -232,12 +195,14 @@ done a = pure (Left a)
 spawn :: RSP () -> RSP (Either a [RSP ()])
 spawn k = pure (Right [k])
 
-data ST a
+--------------------------------------------------------------------------------
 
-local' :: (ST a -> RSP b) -> RSP b
-local' = undefined
+data Δ a
 
-with :: ST a -> (a -> [RSP a] -> Either a b) -> ST b
+local :: (Δ a -> RSP b) -> RSP b
+local = undefined
+
+with :: Δ a -> (a -> RSP (Either a b)) -> RSP b
 with = undefined
 
 --------------------------------------------------------------------------------
@@ -274,8 +239,8 @@ boot app = do
   emit ctx boot ()
   pure ctx
 
-m3 = boot $ \b -> run $ local $ \e -> do
-  await b
-  async $ traceIO "BOOTED"
-  a <- andd [ Left <$> awaitI e, Right <$> emitI e "asd" ]
-  async $ print a
+-- m3 = boot $ \b -> run $ local $ \e -> do
+--   await b
+--   async $ traceIO "BOOTED"
+--   a <- andd [ Left <$> awaitI e, Right <$> emitI e "asd" ]
+--   async $ print a
