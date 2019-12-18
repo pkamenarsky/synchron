@@ -14,6 +14,7 @@ import Control.Monad.Free
 import Data.IORef
 import Data.Maybe (isJust)
 
+import System.IO.Unsafe (unsafePerformIO)
 import Unsafe.Coerce (unsafeCoerce)
 
 import Debug.Trace
@@ -36,11 +37,14 @@ emit (Context ctx) e@(Event event) a = do
   where
     go ks e rsp = do
       a <- runRSP e rsp
-      writeIORef event Nothing
       case a of
-        Done _ -> pure Nothing
+        Done _ -> do
+          writeIORef event Nothing
+          pure Nothing
         Blocked rsp' -> case ks of
-          [] -> pure (Just rsp')
+          [] -> do
+            writeIORef event Nothing
+            pure (Just rsp')
           ((e', k):ks) -> go ks e' (k rsp)
         Next rsp' -> do
           go ks e rsp'
@@ -54,6 +58,8 @@ data VEvent = forall a. VEvent (IEvent a) a
 
 data RSPF next
   = Async (IO ()) next
+
+  -- | Hole
 
   | forall a. Local (IEvent a -> RSP ()) next
   | forall a. EmitI (IEvent a) a next
@@ -127,6 +133,11 @@ isCont :: Run a -> Maybe (Run a)
 isCont rsp@(Cont _ _ _) = Just rsp
 isCont _ = Nothing
 
+-- TODO: hack
+{-# NOINLINE nextId #-}
+nextId :: IORef Int
+nextId = unsafePerformIO $ newIORef 0
+
 runRSP :: Either VEvent (Event b) -> RSP a -> IO (Run a)
 runRSP _ (RSP (Pure a)) = pure (Done a)
 runRSP e (RSP (Free (Async io next))) = do
@@ -145,15 +156,27 @@ runRSP (Right (Event currentEvent)) rsp@(RSP (Free (Await (Event event) next))) 
       pure (Blocked rsp)
 runRSP _ rsp@(RSP (Free (Await _ _))) = pure (Blocked rsp)
 
+-- Local
+runRSP _ (RSP (Free (Local f next))) = do
+  eid <- atomicModifyIORef' nextId $ \i -> (i + 1, i)
+  pure $ Next $ do
+    f (IEvent eid)
+    RSP next
+
+-- IEmit
+runRSP _ (RSP (Free (EmitI e a next))) = do
+  traceIO "EMITI"
+  pure $ Cont e a $ \_ -> RSP next
+
 -- IAwait
 runRSP (Left (VEvent (IEvent e) a)) rsp@(RSP (Free (AwaitI (IEvent event) next))) = do
+  traceIO "AWAITI"
   if e == event
-    then pure (Next $ RSP (next $ unsafeCoerce a))
+    then do
+      traceIO "AWAITI SAME"
+      pure (Next $ RSP (next $ unsafeCoerce a))
     else pure (Blocked rsp)
 runRSP _ rsp@(RSP (Free (AwaitI _ _))) = pure (Blocked rsp)
-
-runRSP _ (RSP (Free (EmitI e a next))) = do
-  pure $ Cont e a $ \_ -> RSP next
 
 -- Or
 runRSP e (RSP (Free (Or rsps next))) = do
@@ -173,9 +196,11 @@ runRSP e (RSP (Free (And rsps next))) = do
   case traverse isDone as of
     Just as' -> pure (Next $ RSP $ next as')
     Nothing -> case focus isCont as of
-      Just (Cont e b f, z) -> pure $ Cont e b $ \rsp -> case rsp of
-        RSP (Free (Or rsps' next')) -> RSP $ Free (Or (replace z (unsafeCoerce f) rsps') next')
-        rsp' -> error "Cont: And"
+      Just (Cont e b f, z) -> do
+        traceIO "CONT"
+        pure $ Cont e b $ \rsp -> case rsp of
+          RSP (Free (And rsps' next')) -> RSP $ Free (And (replace z (unsafeCoerce f) rsps') next')
+          rsp' -> error "Cont: And"
       _ -> if any isBlocked as
         then pure (Blocked $ RSP $ Free $ And (map collapse as) next)
         else pure (Next $ RSP $ Free $ And (map collapse as) next)
@@ -207,6 +232,14 @@ done a = pure (Left a)
 spawn :: RSP () -> RSP (Either a [RSP ()])
 spawn k = pure (Right [k])
 
+data ST a
+
+local' :: (ST a -> RSP b) -> RSP b
+local' = undefined
+
+with :: ST a -> (a -> [RSP a] -> Either a b) -> ST b
+with = undefined
+
 --------------------------------------------------------------------------------
 
 testRSP :: RSP ()
@@ -233,3 +266,16 @@ m2 = server $ \x -> server $ \y -> server $ \z -> run $ do
   async $ traceIO $ show a
   a <- andd [ await x, await x, await x ]
   async $ traceIO $ show a
+
+boot :: Application (Event ())
+boot app = do
+  boot <- newEvent
+  ctx <- app boot
+  emit ctx boot ()
+  pure ctx
+
+m3 = boot $ \b -> run $ local $ \e -> do
+  await b
+  async $ traceIO "BOOTED"
+  a <- andd [ Left <$> awaitI e, Right <$> emitI e "asd" ]
+  async $ print a
