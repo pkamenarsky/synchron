@@ -244,3 +244,56 @@ boot app = do
 --   async $ traceIO "BOOTED"
 --   a <- andd [ Left <$> awaitI e, Right <$> emitI e "asd" ]
 --   async $ print a
+
+--------------------------------------------------------------------------------
+
+data ReplayF next
+  = forall a. Show a => Step1 (IO a) (a -> next)
+  | forall a. Show a => Step2 (IO a) (a -> next)
+
+deriving instance Functor ReplayF
+
+type Replay = Free ReplayF
+
+step1 :: Show a => IO a -> Replay a
+step1 io = liftF (Step1 io id)
+
+step2 :: Show a => IO a -> Replay a
+step2 io = liftF (Step2 io id)
+
+data Value = Value
+
+runReplay :: [Value] -> Replay a -> IO (a, [Value])
+runReplay vs (Pure a) = pure (a, vs)
+runReplay vs (Free (Step1 io next)) = do
+  a <- io
+  traceIO (show a)
+  runReplay (unsafeCoerce a:vs) (next a)
+runReplay vs (Free (Step2 io next)) = do
+  a <- io
+  traceIO (show a)
+  runReplay (unsafeCoerce a:vs) (next a)
+
+replayReplay :: [Value] -> Replay a -> IO a
+replayReplay _ (Pure a) = pure a
+replayReplay (v:vs) (Free (Step1 _ next)) = do
+  replayReplay vs (next $ unsafeCoerce v)
+replayReplay [] (Free (Step1 io next)) = do
+  a <- io
+  replayReplay [] (next a)
+replayReplay (v:vs) (Free (Step2 _ next)) = do
+  replayReplay vs (next $ unsafeCoerce v)
+replayReplay [] (Free (Step2 io next)) = do
+  a <- io
+  replayReplay [] (next a)
+
+r = do
+  (a, vs) <- runReplay [] (f 5)
+  print a
+  a <- replayReplay (reverse vs) (f 5)
+  print a
+  where
+    f c = do
+      a <- if c == 5 then pure "5" else step1 (pure "6")
+      b <- step2 (pure "b")
+      pure (a <> b)
