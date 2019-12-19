@@ -52,14 +52,14 @@ emit (Context ctx) e@(Event event) a = do
 
 --------------------------------------------------------------------------------
 
-data IEvent a = IEvent Int
+data IEvent a = IEvent [Int]
 
 data VEvent = forall a. VEvent (IEvent a) a
 
 data RSPF next
   = Async (IO ()) next
 
-  -- | Hole
+  | Forever
 
   | forall a. Local (IEvent a -> RSP ()) next
   | forall a. EmitI (IEvent a) a next
@@ -94,6 +94,9 @@ orr rsps = RSP $ liftF (Or rsps id)
 
 andd :: [RSP a] -> RSP [a]
 andd rsps = RSP $ liftF (And rsps id)
+
+forever :: RSP a
+forever = RSP $ liftF Forever
 
 --------------------------------------------------------------------------------
 
@@ -141,7 +144,7 @@ runRSP _ rsp@(RSP (Free (Await _ _))) = pure (Blocked rsp)
 runRSP _ (RSP (Free (Local f next))) = do
   eid <- atomicModifyIORef' nextId $ \i -> (i + 1, i)
   pure $ Next $ do
-    f (IEvent eid)
+    f (IEvent [eid])
     RSP next
 
 -- IEmit
@@ -235,23 +238,33 @@ focus f as = case break (isJust . f) as of
 get :: Focus a -> a
 get (Focus a _ _) = a
 
+index :: Focus a -> Int
+index = undefined
+
 without :: Focus a -> [a]
 without (Focus _ xs ys) = xs <> ys
 
 replace :: Focus a -> (b -> b) -> [b] -> [b]
-replace (Focus a xs _) f bs
+replace (Focus _ xs _) f bs
   = take (length xs) bs <> [f (head $ drop l bs)] <> drop (l + 1) bs
+  where
+    l = length xs
+
+replace' :: Focus a -> b -> [b] -> [b]
+replace' (Focus _ xs _) a bs
+  = take (length xs) bs <> [a] <> drop (l + 1) bs
   where
     l = length xs
 
 --------------------------------------------------------------------------------
 
-data K a = forall v. K (IEvent v) v ([Int] -> RSP a -> IO (R a))
+data K a = forall v. K (IEvent v) v (RSP a) ([Int] -> RSP a -> R a)
 
 data R a
   = D a
   | B (RSP a)
   | C (K a)
+  -- | A (IO ()) (RSP a)
 
 anyDone :: [R a] -> Either (a, [RSP a]) [RSP a]
 anyDone = undefined
@@ -265,40 +278,76 @@ allDone = undefined
 blocked :: [R a] -> Maybe [RSP a]
 blocked = undefined
 
-completeRSP :: [Int] -> Maybe (IEvent b, b) -> RSP a -> IO (R a)
+completeRSP :: [Int] -> Maybe (IEvent b, b) -> RSP a -> R a
 
-completeRSP _ e (RSP (Pure a)) = pure (D a)
+completeRSP _ _ (RSP (Pure a)) = D a
 
--- TODO: just fire events flag
-completeRSP (n:ns) (Just (IEvent e, v)) rsp@(RSP (Free (AwaitI (IEvent e') next))) = do
+completeRSP _ _ rsp@(RSP (Free Forever)) = B rsp
+
+-- completeRSP _ _ (RSP (Free (Async io next))) = A io (RSP next)
+
+completeRSP i@(n:ns) e (RSP (Free (Local f next))) =
+  completeRSP (n + 1:ns) e (f (IEvent i) >> RSP next)
+
+completeRSP (n:ns) (Just (IEvent e, v)) rsp@(RSP (Free (AwaitI (IEvent e') next))) =
   if e == e'
     then completeRSP (n + 1:ns) Nothing (RSP $ next $ unsafeCoerce v)
-    else pure (B rsp)
+    else B rsp
 
-completeRSP i@(n:ns) _ (RSP (Free (EmitI e v _))) = do
-  pure $ C $ K e v $ \i' rsp -> case rsp of
+completeRSP i@(n:ns) _ (RSP (Free (EmitI e v _))) =
+  -- Set a temporary 'forever' placeholder so that the emit isn't reevaluated
+  C $ K e v forever $ \i' rsp -> case rsp of
     RSP (Free (EmitI _ _ next))
       | i == i' -> completeRSP (n + 1:ns) Nothing (RSP next)
-    _ -> pure (B rsp)
+    _ -> B rsp
 
-completeRSP i@(n:ns) e (RSP (Free (Or rsps next))) = do
-  rs <- traverse (\(m, rsp) -> completeRSP (0:m:n:ns) e rsp) (zip [0..] rsps)
-
+completeRSP i@(n:ns) e (RSP (Free (Or rsps next))) =
   case anyDone rs of
+  -- 1. If a trail is done, next
       Left (a, rsps') -> completeRSP (n + 1:ns) Nothing (RSP $ next (a, rsps'))
       Right rsps'     -> case anyCont rs of
-        Just (K e v k, _) -> pure $ C $ K e v $ \i' rsp -> case rsp of
-          RSP (Free (Or rsps'' next))
-            | i == i' -> completeRSP i' undefined undefined
-          _ -> pure (B rsp)
-        Nothing -> pure (B $ RSP $ Free $ Or rsps' next)
+  -- 2. If a trail is a continuation, return a continuation
+        Just (k, z) -> resume rsps' k z
+  -- 3. If not a continuation, return blocked state
+        Nothing     -> B $ RSP $ Free $ Or rsps' next
 
-completeRSP (n:ns) e (RSP (Free (And rsps next))) = do
-  rs <- traverse (\(m, rsp) -> completeRSP (0:m:n:ns) e rsp) (zip [0..] rsps)
+  where
+    rs = map (\(m, rsp) -> completeRSP (0:m:n:ns) e rsp) (zip [0..] rsps)
 
+    resume rsps' (K e v h k) z = C $ K e v (RSP $ Free $ Or (replace' z h rsps') next) $ \i' rsp -> case rsp of
+       -- 2.1 Compare constructor and previous step id with current step id
+       RSP (Free (Or rsps'' next'))
+       -- 2.1.1 If there's match, continue with same id and no event
+         | i == i' -> case k (0:index z:n:ns) (get z) of
+             D a         -> completeRSP i' Nothing (RSP $ Free $ Or (replace' z (RSP $ Pure $ unsafeCoerce a) rsps'') next')
+             B rsp       -> completeRSP i' Nothing (RSP $ Free $ Or (replace' z (unsafeCoerce rsp) rsps'') next')
+             C k         -> resume rsps' k z
+             -- A io next'' -> A io (RSP $ Free $ Or (replace' z (unsafeCoerce next'') rsps'') next')
+       -- 2.1.2 Otherwise, return unchanged state
+       _ -> B rsp
+
+completeRSP (n:ns) e (RSP (Free (And rsps next))) =
   case allDone rs of
     Left as     -> completeRSP (n + 1:ns) Nothing (RSP $ next as)
-    Right rsps' -> pure (B $ RSP $ Free $ And rsps' next)
+    Right rsps' -> B $ RSP $ Free $ And rsps' next
+
+  where
+    rs = map (\(m, rsp) -> completeRSP (0:m:n:ns) e rsp) (zip [0..] rsps)
+
+runR :: [[Int] -> RSP a -> R a] -> R a -> IO a
+runR _ (D a) = pure a
+runR [] (B rsp) = error "Program blocked"
+runR (k:ks) (B rsp) = runR ks (k [0] rsp)
+runR ks (C (K e v rsp k)) = runR (k:ks) rsp'
+  where
+    rsp' = completeRSP [0] (Just (e, v)) rsp
+
+runProgram :: RSP a -> IO a
+runProgram rsp = runR [] (completeRSP [0] Nothing rsp)
+
+p1 = runProgram $ local $ \e -> do
+  (a, _) <- orr [ Left <$> awaitI e, Right <$> emitI e "asd" ]
+  pure $ trace ("A: " <> show a) ()
 
 --------------------------------------------------------------------------------
 
