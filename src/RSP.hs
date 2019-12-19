@@ -218,10 +218,36 @@ run rsp = Context <$> newMVar (Just rsp)
 
 --------------------------------------------------------------------------------
 
+data F f a = P a | F Int (f (F f a))
+
+instance Functor f => Functor (F f) where
+  fmap f = go where
+    go (P a)  = P (f a)
+    go (F x fa) = F x (go <$> fa)
+  {-# INLINE fmap #-}
+
+instance Functor f => Applicative (F f) where
+  pure = P
+  {-# INLINE pure #-}
+
+  -- TODO
+  f' <*> a' = do
+    f <- f'
+    a <- a'
+    pure (f a)
+
+instance Functor f => Monad (F f) where
+  return = P
+  {-# INLINE return #-}
+  P a >>= f = f a
+  F x m >>= f = F (x + 1) ((>>= f) <$> m)
+
+--------------------------------------------------------------------------------
+
 data R a
   = D a
   | B (RSP a)
-  | C (RSP a -> IO (R a))
+  | forall v. C (IEvent v) v (RSP a -> IO (R a))
 
 anyDone :: [R a] -> Either (a, [RSP a]) [RSP a]
 anyDone = undefined
@@ -240,6 +266,11 @@ completeRSP (Just (IEvent e, v)) rsp@(RSP (Free (AwaitI (IEvent e') next))) = do
   if e == e'
     then completeRSP Nothing (RSP $ next $ unsafeCoerce v)
     else pure (B rsp)
+
+completeRSP _ (RSP (Free (EmitI e v _))) = do
+  pure $ C e v $ \rsp -> case rsp of
+    RSP (Free (EmitI _ _ next)) -> completeRSP Nothing (RSP next)
+    _ -> error "EmitI"
 
 completeRSP e (RSP (Free (Or rsps next))) = do
   rs <- traverse (completeRSP e) rsps
