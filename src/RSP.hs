@@ -218,27 +218,64 @@ run rsp = Context <$> newMVar (Just rsp)
 
 --------------------------------------------------------------------------------
 
-many :: RSP (Either a [RSP ()]) -> RSP a
-many k = do
-  go [ Left <$> k ]
-  where
-    go ks = do
-      a <- orr ks
-      undefined
+data R a
+  = D a
+  | B (RSP a)
+  | C (RSP a -> IO (R a))
 
-done :: a -> RSP (Either a [RSP ()])
-done a = pure (Left a)
+anyDone :: [R a] -> Either (a, [RSP a]) [RSP a]
+anyDone = undefined
 
-spawn :: RSP () -> RSP (Either a [RSP ()])
-spawn k = pure (Right [k])
+allDone :: [R a] -> Either [a] [RSP a]
+allDone = undefined
 
-data ST a
+blocked :: [R a] -> Maybe [RSP a]
+blocked = undefined
 
-local' :: (ST a -> RSP b) -> RSP b
-local' = undefined
+completeRSP :: Maybe (IEvent b, b) -> RSP a -> IO (R a)
 
-with :: ST a -> (a -> [RSP a] -> Either a b) -> ST b
-with = undefined
+completeRSP e (RSP (Pure a)) = pure (D a)
+
+completeRSP (Just (IEvent e, v)) rsp@(RSP (Free (AwaitI (IEvent e') next))) = do
+  if e == e'
+    then completeRSP Nothing (RSP $ next $ unsafeCoerce v)
+    else pure (B rsp)
+
+completeRSP e (RSP (Free (Or rsps next))) = do
+  rs <- traverse (completeRSP e) rsps
+  case anyDone rs of
+    Left (a, rsps') -> completeRSP Nothing (RSP $ next (a, rsps'))
+    Right rsps'     -> pure (B $ RSP $ Free $ Or rsps' next)
+
+completeRSP e (RSP (Free (And rsps next))) = do
+  rs <- traverse (completeRSP e) rsps
+  case allDone rs of
+    Left as     -> completeRSP Nothing (RSP $ next as)
+    Right rsps' -> pure (B $ RSP $ Free $ And rsps' next)
+
+--------------------------------------------------------------------------------
+
+-- many :: RSP (Either a [RSP ()]) -> RSP a
+-- many k = do
+--   go [ Left <$> k ]
+--   where
+--     go ks = do
+--       a <- orr ks
+--       undefined
+-- 
+-- done :: a -> RSP (Either a [RSP ()])
+-- done a = pure (Left a)
+-- 
+-- spawn :: RSP () -> RSP (Either a [RSP ()])
+-- spawn k = pure (Right [k])
+-- 
+-- data ST a
+-- 
+-- local' :: (ST a -> RSP b) -> RSP b
+-- local' = undefined
+-- 
+-- with :: ST a -> (a -> [RSP a] -> Either a b) -> ST b
+-- with = undefined
 
 --------------------------------------------------------------------------------
 
