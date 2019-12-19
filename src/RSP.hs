@@ -106,25 +106,6 @@ data Run a
   | Next (RSP a)
   | forall b. Cont (IEvent b) b (RSP a -> RSP a)
 
-data Focus a = Focus a [a] [a]
-
-focus :: (a -> Maybe b) -> [a] -> Maybe (b, Focus a)
-focus f as = case break (isJust . f) as of
-  (xs, y:ys) -> (,) <$> f y <*> Just (Focus y xs ys)
-  (_, [])    -> Nothing
-
-get :: Focus a -> a
-get (Focus a _ _) = a
-
-without :: Focus a -> [a]
-without (Focus _ xs ys) = xs <> ys
-
-replace :: Focus a -> (b -> b) -> [b] -> [b]
-replace (Focus a xs _) f bs
-  = take (length xs) bs <> [f (head $ drop l bs)] <> drop (l + 1) bs
-  where
-    l = length xs
-
 isDone :: Run a -> Maybe a
 isDone (Done a) = Just a
 isDone _ = Nothing
@@ -244,13 +225,39 @@ instance Functor f => Monad (F f) where
 
 --------------------------------------------------------------------------------
 
+data Focus a = Focus a [a] [a]
+
+focus :: (a -> Maybe b) -> [a] -> Maybe (b, Focus a)
+focus f as = case break (isJust . f) as of
+  (xs, y:ys) -> (,) <$> f y <*> Just (Focus y xs ys)
+  (_, [])    -> Nothing
+
+get :: Focus a -> a
+get (Focus a _ _) = a
+
+without :: Focus a -> [a]
+without (Focus _ xs ys) = xs <> ys
+
+replace :: Focus a -> (b -> b) -> [b] -> [b]
+replace (Focus a xs _) f bs
+  = take (length xs) bs <> [f (head $ drop l bs)] <> drop (l + 1) bs
+  where
+    l = length xs
+
+--------------------------------------------------------------------------------
+
+data K a = forall v. K (IEvent v) v ([Int] -> RSP a -> IO (R a))
+
 data R a
   = D a
   | B (RSP a)
-  | forall v. C (IEvent v) v (RSP a -> IO (R a))
+  | C (K a)
 
 anyDone :: [R a] -> Either (a, [RSP a]) [RSP a]
 anyDone = undefined
+
+anyCont :: [R a] -> Maybe (K a, Focus (RSP a))
+anyCont = undefined
 
 allDone :: [R a] -> Either [a] [RSP a]
 allDone = undefined
@@ -258,30 +265,39 @@ allDone = undefined
 blocked :: [R a] -> Maybe [RSP a]
 blocked = undefined
 
-completeRSP :: Maybe (IEvent b, b) -> RSP a -> IO (R a)
+completeRSP :: [Int] -> Maybe (IEvent b, b) -> RSP a -> IO (R a)
 
-completeRSP e (RSP (Pure a)) = pure (D a)
+completeRSP _ e (RSP (Pure a)) = pure (D a)
 
-completeRSP (Just (IEvent e, v)) rsp@(RSP (Free (AwaitI (IEvent e') next))) = do
+-- TODO: just fire events flag
+completeRSP (n:ns) (Just (IEvent e, v)) rsp@(RSP (Free (AwaitI (IEvent e') next))) = do
   if e == e'
-    then completeRSP Nothing (RSP $ next $ unsafeCoerce v)
+    then completeRSP (n + 1:ns) Nothing (RSP $ next $ unsafeCoerce v)
     else pure (B rsp)
 
-completeRSP _ (RSP (Free (EmitI e v _))) = do
-  pure $ C e v $ \rsp -> case rsp of
-    RSP (Free (EmitI _ _ next)) -> completeRSP Nothing (RSP next)
-    _ -> error "EmitI"
+completeRSP i@(n:ns) _ (RSP (Free (EmitI e v _))) = do
+  pure $ C $ K e v $ \i' rsp -> case rsp of
+    RSP (Free (EmitI _ _ next))
+      | i == i' -> completeRSP (n + 1:ns) Nothing (RSP next)
+    _ -> pure (B rsp)
 
-completeRSP e (RSP (Free (Or rsps next))) = do
-  rs <- traverse (completeRSP e) rsps
+completeRSP i@(n:ns) e (RSP (Free (Or rsps next))) = do
+  rs <- traverse (\(m, rsp) -> completeRSP (0:m:n:ns) e rsp) (zip [0..] rsps)
+
   case anyDone rs of
-    Left (a, rsps') -> completeRSP Nothing (RSP $ next (a, rsps'))
-    Right rsps'     -> pure (B $ RSP $ Free $ Or rsps' next)
+      Left (a, rsps') -> completeRSP (n + 1:ns) Nothing (RSP $ next (a, rsps'))
+      Right rsps'     -> case anyCont rs of
+        Just (K e v k, _) -> pure $ C $ K e v $ \i' rsp -> case rsp of
+          RSP (Free (Or rsps'' next))
+            | i == i' -> completeRSP i' undefined undefined
+          _ -> pure (B rsp)
+        Nothing -> pure (B $ RSP $ Free $ Or rsps' next)
 
-completeRSP e (RSP (Free (And rsps next))) = do
-  rs <- traverse (completeRSP e) rsps
+completeRSP (n:ns) e (RSP (Free (And rsps next))) = do
+  rs <- traverse (\(m, rsp) -> completeRSP (0:m:n:ns) e rsp) (zip [0..] rsps)
+
   case allDone rs of
-    Left as     -> completeRSP Nothing (RSP $ next as)
+    Left as     -> completeRSP (n + 1:ns) Nothing (RSP $ next as)
     Right rsps' -> pure (B $ RSP $ Free $ And rsps' next)
 
 --------------------------------------------------------------------------------
