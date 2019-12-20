@@ -262,7 +262,7 @@ data K a = forall v. K (IEvent v) v (RSP a) ([Int] -> RSP a -> R a)
 
 data R a
   = D a
-  | B (RSP a)
+  | B [Int] (RSP a)
   | C (K a)
   -- | A (IO ()) (RSP a)
 
@@ -282,24 +282,24 @@ completeRSP :: [Int] -> Maybe (IEvent b, b) -> RSP a -> R a
 
 completeRSP _ _ (RSP (Pure a)) = D a
 
-completeRSP _ _ rsp@(RSP (Free Forever)) = B rsp
+completeRSP i _ rsp@(RSP (Free Forever)) = B i rsp
 
 -- completeRSP _ _ (RSP (Free (Async io next))) = A io (RSP next)
 
 completeRSP i@(n:ns) e (RSP (Free (Local f next))) =
   completeRSP (n + 1:ns) e (f (IEvent i) >> RSP next)
 
-completeRSP (n:ns) (Just (IEvent e, v)) rsp@(RSP (Free (AwaitI (IEvent e') next))) =
+completeRSP i@(n:ns) (Just (IEvent e, v)) rsp@(RSP (Free (AwaitI (IEvent e') next))) =
   if e == e'
     then completeRSP (n + 1:ns) Nothing (RSP $ next $ unsafeCoerce v)
-    else B rsp
+    else B i rsp
 
 completeRSP i@(n:ns) _ (RSP (Free (EmitI e v _))) =
   -- Set a temporary 'forever' placeholder so that the emit isn't reevaluated
   C $ K e v forever $ \i' rsp -> case rsp of
     RSP (Free (EmitI _ _ next))
       | i == i' -> completeRSP (n + 1:ns) Nothing (RSP next)
-    _ -> B rsp
+    _ -> B i' rsp
 
 completeRSP i@(n:ns) e (RSP (Free (Or rsps next))) =
   case anyDone rs of
@@ -309,7 +309,7 @@ completeRSP i@(n:ns) e (RSP (Free (Or rsps next))) =
   -- 2. If a trail is a continuation, return a continuation
         Just (k, z) -> resume rsps' k z
   -- 3. If not a continuation, return blocked state
-        Nothing     -> B $ RSP $ Free $ Or rsps' next
+        Nothing     -> B i $ RSP $ Free $ Or rsps' next
 
   where
     rs = map (\(m, rsp) -> completeRSP (0:m:n:ns) e rsp) (zip [0..] rsps)
@@ -320,30 +320,32 @@ completeRSP i@(n:ns) e (RSP (Free (Or rsps next))) =
        -- 2.1.1 If there's match, continue with same id and no event
          | i == i' -> case k (0:index z:n:ns) (get z) of
              D a         -> completeRSP i' Nothing (RSP $ Free $ Or (replace' z (RSP $ Pure $ unsafeCoerce a) rsps'') next')
-             B rsp       -> completeRSP i' Nothing (RSP $ Free $ Or (replace' z (unsafeCoerce rsp) rsps'') next')
+             B _ rsp     -> completeRSP i' Nothing (RSP $ Free $ Or (replace' z (unsafeCoerce rsp) rsps'') next')
              C k         -> resume rsps' k z
              -- A io next'' -> A io (RSP $ Free $ Or (replace' z (unsafeCoerce next'') rsps'') next')
        -- 2.1.2 Otherwise, return unchanged state
-       _ -> B rsp
+       _ -> B i' rsp
 
-completeRSP (n:ns) e (RSP (Free (And rsps next))) =
+completeRSP i@(n:ns) e (RSP (Free (And rsps next))) =
   case allDone rs of
     Left as     -> completeRSP (n + 1:ns) Nothing (RSP $ next as)
-    Right rsps' -> B $ RSP $ Free $ And rsps' next
+    Right rsps' -> B i $ RSP $ Free $ And rsps' next
 
   where
     rs = map (\(m, rsp) -> completeRSP (0:m:n:ns) e rsp) (zip [0..] rsps)
 
-runR :: [[Int] -> RSP a -> R a] -> R a -> IO a
-runR _ (D a) = pure a
-runR [] (B rsp) = error "Program blocked"
-runR (k:ks) (B rsp) = runR ks (k [0] rsp)
-runR ks (C (K e v rsp k)) = runR (k:ks) rsp'
+runR :: [Int] -> [([Int], [Int] -> RSP a -> R a)] -> R a -> IO a
+runR _ _ (D a) = pure a
+runR _ [] (B _ rsp) = error "Program blocked"
+runR _ ((i, k):ks) (B i' rsp) = runR i' ks (k i rsp)
+-- TODO: index propagation
+runR i ks (C (K e v rsp k)) = runR (error "runR") ((i, k):ks) rsp'
   where
-    rsp' = completeRSP [0] (Just (e, v)) rsp
+    rsp' = completeRSP i (Just (e, v)) rsp
 
 runProgram :: RSP a -> IO a
-runProgram rsp = runR [] (completeRSP [0] Nothing rsp)
+runProgram rsp = case completeRSP [0] Nothing rsp of
+  b@(B i next) -> runR i [] b
 
 p1 = runProgram $ local $ \e -> do
   (a, _) <- orr [ Left <$> awaitI e, Right <$> emitI e "asd" ]
