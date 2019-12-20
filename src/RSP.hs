@@ -54,8 +54,11 @@ emit e a = RSP $ liftF (Emit e a ())
 await :: Event a -> RSP a
 await e = RSP $ liftF (Await e id)
 
-orr :: [RSP a] -> RSP (a, [RSP a])
-orr rsps = RSP $ liftF (Or rsps id)
+orr' :: [RSP a] -> RSP (a, [RSP a])
+orr' rsps = RSP $ liftF (Or rsps id)
+
+orr :: [RSP a] -> RSP a
+orr rsps = fmap fst $ RSP $ liftF (Or rsps id)
 
 andd :: [RSP a] -> RSP [a]
 andd rsps = RSP $ liftF (And rsps id)
@@ -146,17 +149,21 @@ reactRSP _ _ rsp = rsp
 
 advanceRSP :: RSP a -> IO (R a)
 -- Pure
-advanceRSP (RSP (Pure a))                = pure (D a)
+advanceRSP (RSP (Pure a))                   = pure (D a)
 -- Forever
-advanceRSP rsp@(RSP (Free Forever))      = pure (B rsp)
+advanceRSP rsp@(RSP (Free Forever))         = pure (B rsp)
+-- Async
+advanceRSP rsp@(RSP (Free (Async io next))) = do
+  forkIO io
+  advanceRSP (RSP next)
 -- Local
-advanceRSP (RSP (Free (Local f next)))   = do
+advanceRSP (RSP (Free (Local f next)))      = do
   eid <- newIORef ()
   advanceRSP (f (Event eid) >> RSP next)
 -- Await
-advanceRSP rsp@(RSP (Free (Await _ _)))  = pure (B rsp)
+advanceRSP rsp@(RSP (Free (Await _ _)))     = pure (B rsp)
 -- Emit
-advanceRSP (RSP (Free (Emit e v next)))  = pure (C forever $ K e v $ \_ -> advanceRSP (RSP next))
+advanceRSP (RSP (Free (Emit e v next)))     = pure (C forever $ K e v $ \_ -> advanceRSP (RSP next))
 -- Or
 advanceRSP (RSP (Free (Or rsps next))) = do
   as <- traverse advanceRSP rsps
@@ -164,6 +171,7 @@ advanceRSP (RSP (Free (Or rsps next))) = do
   case anyDone (zip as rsps) of
       Left (a, z) -> advanceRSP (RSP $ next (a, without z))
       Right rbcs  -> case anyCont (zip rbcs rsps) of
+        -- TODO: remove forever
         Left (k, z) -> pure (resume (RSP $ Free $ Or (replace z forever rsps) next) k z)
         Right rsps' -> pure (B $ RSP $ Free $ Or rsps' next)
 -- And
@@ -185,30 +193,41 @@ resume hole (K e v k) z = C hole $ K e v $ \rsp -> case rsp of
        D a       -> advanceRSP (RSP $ Free $ Or (replace z (RSP $ Pure $ unsafeCoerce a) rsps') next')
        B rsp     -> advanceRSP (RSP $ Free $ Or (replace z (unsafeCoerce rsp) rsps') next')
        C hole' k -> pure (resume hole k z)
+   RSP (Free (And rsps' next')) -> do
+     a <- k (get z)
+
+     case a of
+       D a       -> advanceRSP (RSP $ Free $ And (replace z (RSP $ Pure $ unsafeCoerce a) rsps') next')
+       B rsp     -> advanceRSP (RSP $ Free $ And (replace z (unsafeCoerce rsp) rsps') next')
+       C hole' k -> pure (resume hole k z)
    _ -> error "advanceRSP: Or"
 
 run :: [RSP a -> IO (R a)] -> Maybe (Event b, b) -> RSP a -> IO a
 run ks (Just (e, a)) rsp = traceIO "react" >> run ks Nothing (reactRSP e a rsp)
 run ks Nothing rsp = do
-  r <- advanceRSP rsp
-  traceIO $ "advanced, " <> show (length ks)
-  go rsp ks r
+  case ks of
+    [] -> do
+      r <- advanceRSP rsp
+      traceIO $ "advanced1, " <> show (length ks)
+      go rsp ks r
+    (k:ks) -> do
+      r <- k rsp
+      traceIO $ "advanced2, " <> show (length ks)
+      go rsp ks r
   where
     go _ []     (D a)    = traceIO "done" >> pure a
     go _ (k:ks) (D a)    = error "Done, but stack not empty"
-    go _ []     (B rsp') = traceIO "blocked" >> run [] Nothing rsp'
-    go _ (k:ks) (B rsp') = do
-      traceIO "continue"
-      r <- k rsp'
-      go rsp' ks r
+    go _ ks     (B rsp') = traceIO "blocked" >> run ks Nothing rsp'
     go _ ks (C rsp' (K e v k)) = traceIO "resume" >> run (k:ks) (Just (e, v)) rsp'
 
 runProgram :: RSP a -> IO a
 runProgram = run [] Nothing
 
 p1 = runProgram $ local $ \e -> do
-  (a, _) <- orr [ Left <$> await e, Right <$> emit e "asd" ]
-  pure $ trace ("A: " <> show a) ()
+  a <- andd [ Left <$> ((,) <$> await e <*> await e), Right <$> emit e "A", Right <$> emit e "C" ]
+  async $ traceIO (show a)
+  a <- orr [ Left <$> await e, Right <$> emit e "B" ]
+  async $ traceIO (show a)
 
 --------------------------------------------------------------------------------
 
