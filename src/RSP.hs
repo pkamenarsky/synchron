@@ -102,9 +102,9 @@ replace (Focus _ xs _) a bs
 data K a = forall v. K (Event v) v (RSP a -> IO (R a))
 
 data R a
-  = D a
-  | B (RSP a)
-  | C (RSP a) (K a)
+  = D a              -- Done
+  | B (RSP a)        -- Blocked
+  | C (RSP a) (K a)  -- Continuation
 
 isDone :: R a -> Either a (R a)
 isDone (D a) = Left a
@@ -149,21 +149,22 @@ reactRSP _ _ rsp = rsp
 
 advanceRSP :: RSP a -> IO (R a)
 -- Pure
-advanceRSP (RSP (Pure a))                   = pure (D a)
+advanceRSP (RSP (Pure a)) = pure (D a)
 -- Forever
-advanceRSP rsp@(RSP (Free Forever))         = pure (B rsp)
+advanceRSP rsp@(RSP (Free Forever)) = pure (B rsp)
 -- Async
 advanceRSP rsp@(RSP (Free (Async io next))) = do
   forkIO io
   advanceRSP (RSP next)
 -- Local
-advanceRSP (RSP (Free (Local f next)))      = do
+advanceRSP (RSP (Free (Local f next))) = do
   eid <- newIORef ()
   advanceRSP (f (Event eid) >> RSP next)
 -- Await
-advanceRSP rsp@(RSP (Free (Await _ _)))     = pure (B rsp)
+advanceRSP rsp@(RSP (Free (Await _ _))) = pure (B rsp)
 -- Emit
-advanceRSP (RSP (Free (Emit e v next)))     = pure (C forever $ K e v $ \_ -> advanceRSP (RSP next))
+advanceRSP rsp@(RSP (Free (Emit e v next)))
+  = pure (C rsp $ K e v $ \_ -> advanceRSP (RSP next))
 -- Or
 advanceRSP rsp@(RSP (Free (Or rsps next))) = do
   as <- traverse advanceRSP rsps
@@ -200,7 +201,7 @@ resume hole (K e v k) z = C hole $ K e v $ \rsp -> case rsp of
        D a   -> advanceRSP (RSP $ Free $ And (replace z (RSP $ Pure $ unsafeCoerce a) rsps') next')
        B rsp -> advanceRSP (RSP $ Free $ And (replace z (unsafeCoerce rsp) rsps') next')
        C _ k -> pure (resume hole k z)
-   _ -> error "advanceRSP: Or"
+   _ -> error "advanceRSP"
 
 runRSP' :: [RSP a -> IO (R a)] -> Maybe (Event b, b) -> RSP a -> IO a
 runRSP' ks (Just (e, a)) rsp = runRSP' ks Nothing (reactRSP e a rsp)
