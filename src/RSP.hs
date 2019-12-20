@@ -187,23 +187,26 @@ resume rsps (K e v k) z = C $ K e v $ \rsp -> case rsp of
        C k         -> pure (resume rsps k z)
    _ -> error "advanceRSP: Or"
 
+run :: [RSP a -> IO (R a)] -> Maybe (Event b, b) -> RSP a -> IO a
+run ks (Just (e, a)) rsp = run ks Nothing (reactRSP e a rsp)
+run ks Nothing rsp = do
+  r <- advanceRSP rsp
+  go ks r
+  where
+    go []     (D a) = pure a
+    go _      (D _) = error "Done, but stack not empty"
+    go []     (B _) = error "Program blocked"
+    go (k:ks) (B _) = do
+      r <- k rsp
+      go ks r
+    go ks (C (K e v k)) = run (k:ks) (Just (e, v)) rsp
 
+runProgram :: RSP a -> IO a
+runProgram = run [] Nothing
 
--- runR :: [Int] -> [([Int], [Int] -> RSP a -> R a)] -> R a -> IO a
--- runR _ _ (D a) = pure a
--- runR _ [] (B _ rsp) = error "Program blocked"
--- runR _ ((i, k):ks) (B i' rsp) = runR i' ks (k i rsp)
--- runR i ks (C (K e v rsp k)) = runR (error "runR") ((i, k):ks) rsp'
---   where
---     rsp' = completeRSP i (Just (e, v)) rsp
--- 
--- runProgram :: RSP a -> IO a
--- runProgram rsp = case completeRSP [0] Nothing rsp of
---   b@(B i next) -> runR i [] b
--- 
--- p1 = runProgram $ local $ \e -> do
---   (a, _) <- orr [ Left <$> await e, Right <$> emit e "asd" ]
---   pure $ trace ("A: " <> show a) ()
+p1 = runProgram $ local $ \e -> do
+  (a, _) <- orr [ Left <$> await e, Right <$> emit e "asd" ]
+  pure $ trace ("A: " <> show a) ()
 
 --------------------------------------------------------------------------------
 
