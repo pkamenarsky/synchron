@@ -66,14 +66,15 @@ forever = RSP $ liftF Forever
 --------------------------------------------------------------------------------
 
 data Focus a = Focus a [a] [a]
-  deriving Functor
+  deriving (Show, Functor)
 
 focus :: (a -> Either b c) -> [a] -> Either (b, Focus a) [c]
-focus f as = case break (isLeft . f) as of
-  (xs, y:ys) -> case f y of
-    Left y' -> Left (y', Focus y xs ys)
-    _       -> undefined
-  (_, []) -> undefined
+focus f as = go [] as []
+  where
+    go _ [] rs = Right rs
+    go ls (a:as) rs = case f a of
+      Left b  -> Left (b, Focus a ls as)
+      Right c -> go (ls <> [a]) as (rs <> [c])
 
 get :: Focus a -> a
 get (Focus a _ _) = a
