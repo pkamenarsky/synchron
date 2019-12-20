@@ -114,7 +114,7 @@ data K a = forall v. K (Event v) v (RSP a) ([Int] -> RSP a -> R a)
 data R a
   = D a
   | B [Int] (RSP a)
-  | C (K a)
+  | C [Int] (K a)
   -- | A (IO ()) (RSP a)
 
 anyDone :: [R a] -> Either (a, [RSP a]) [RSP a]
