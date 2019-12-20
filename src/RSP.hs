@@ -19,53 +19,19 @@ import Unsafe.Coerce (unsafeCoerce)
 
 import Debug.Trace
 
-
-newtype Context = Context (MVar (Maybe (RSP ())))
-
-newtype Event a = Event (IORef (Maybe a))
-
-newEvent :: IO (Event a)
-newEvent = Event <$> newIORef Nothing
-
-emit :: Context -> Event a -> a -> IO Bool
-emit (Context ctx) e@(Event event) a = do
-  modifyMVar ctx $ \rsp' -> do
-    writeIORef event (Just a)
-    case rsp' of
-      Nothing -> pure (Nothing, False)
-      Just rsp -> (,True) <$> go [] (Right e) rsp
-  where
-    go ks e rsp = do
-      a <- runRSP e rsp
-      case a of
-        Done _ -> do
-          writeIORef event Nothing
-          pure Nothing
-        Blocked rsp' -> case ks of
-          [] -> do
-            writeIORef event Nothing
-            pure (Just rsp')
-          ((e', k):ks) -> go ks e' (k rsp)
-        Next rsp' -> do
-          go ks e rsp'
-        Cont e' b k -> go ((e, k):ks) (Left (VEvent e' b)) rsp
-
 --------------------------------------------------------------------------------
 
-data IEvent a = IEvent [Int]
-
-data VEvent = forall a. VEvent (IEvent a) a
+data Event a = Event [Int]
 
 data RSPF next
   = Async (IO ()) next
 
   | Forever
 
-  | forall a. Local (IEvent a -> RSP ()) next
-  | forall a. EmitI (IEvent a) a next
-  | forall a. AwaitI (IEvent a) (a -> next)
-
+  | forall a. Local (Event a -> RSP ()) next
+  | forall a. Emit (Event a) a next
   | forall a. Await (Event a) (a -> next)
+
   | forall a. Or [RSP a] ((a, [RSP a]) -> next)
   | forall a. And [RSP a] ([a] -> next)
 
@@ -77,14 +43,11 @@ newtype RSP a = RSP { getRSP :: Free RSPF a }
 async :: IO () -> RSP ()
 async io = RSP $ liftF (Async io ())
 
-local :: (IEvent a -> RSP ()) -> RSP ()
+local :: (Event a -> RSP ()) -> RSP ()
 local f = RSP $ liftF (Local f ())
 
-emitI :: IEvent a -> a -> RSP ()
-emitI e a = RSP $ liftF (EmitI e a ())
-
-awaitI :: IEvent a -> RSP a
-awaitI e = RSP $ liftF (AwaitI e id)
+emit :: Event a -> a -> RSP ()
+emit e a = RSP $ liftF (Emit e a ())
 
 await :: Event a -> RSP a
 await e = RSP $ liftF (Await e id)
@@ -100,14 +63,11 @@ forever = RSP $ liftF Forever
 
 --------------------------------------------------------------------------------
 
-sameReference :: IORef a -> IORef b -> Bool
-sameReference = unsafeCoerce ((==) :: IORef a -> IORef a -> Bool)
-
 data Run a
   = Done a
   | Blocked (RSP a)
   | Next (RSP a)
-  | forall b. Cont (IEvent b) b (RSP a -> RSP a)
+  | forall b. Cont (Event b) b (RSP a -> RSP a)
 
 isDone :: Run a -> Maybe a
 isDone (Done a) = Just a
@@ -116,115 +76,6 @@ isDone _ = Nothing
 isCont :: Run a -> Maybe (Run a)
 isCont rsp@(Cont _ _ _) = Just rsp
 isCont _ = Nothing
-
--- TODO: hack
-{-# NOINLINE nextId #-}
-nextId :: IORef Int
-nextId = unsafePerformIO $ newIORef 0
-
-runRSP :: Either VEvent (Event b) -> RSP a -> IO (Run a)
-runRSP _ (RSP (Pure a)) = pure (Done a)
-runRSP e (RSP (Free (Async io next))) = do
-  forkIO io
-  runRSP e (RSP next)
-
--- Await
-runRSP (Right (Event currentEvent)) rsp@(RSP (Free (Await (Event event) next))) = do
-  if sameReference currentEvent event
-    then do
-      a <- readIORef event
-      case a of
-        Just a' -> pure (Next $ RSP (next a'))
-        Nothing -> pure (Blocked rsp)
-    else
-      pure (Blocked rsp)
-runRSP _ rsp@(RSP (Free (Await _ _))) = pure (Blocked rsp)
-
--- Local
-runRSP _ (RSP (Free (Local f next))) = do
-  eid <- atomicModifyIORef' nextId $ \i -> (i + 1, i)
-  pure $ Next $ do
-    f (IEvent [eid])
-    RSP next
-
--- IEmit
-runRSP _ (RSP (Free (EmitI e a next))) = do
-  traceIO "EMITI"
-  pure $ Cont e a $ \_ -> RSP next
-
--- IAwait
-runRSP (Left (VEvent (IEvent e) a)) rsp@(RSP (Free (AwaitI (IEvent event) next))) = do
-  traceIO "AWAITI"
-  if e == event
-    then do
-      traceIO "AWAITI SAME"
-      pure (Next $ RSP (next $ unsafeCoerce a))
-    else pure (Blocked rsp)
-runRSP _ rsp@(RSP (Free (AwaitI _ _))) = pure (Blocked rsp)
-
--- Or
-runRSP e (RSP (Free (Or rsps next))) = do
-  as <- traverse (runRSP e) rsps
-
-  case focus isDone as of
-    Just (a, z) -> pure (Next $ RSP $ next (a, map collapse (without z)))
-    Nothing -> case focus isCont as of
-      Just (Cont e b f, z) -> pure $ Cont e b $ \rsp -> case rsp of
-        RSP (Free (Or rsps' next')) -> RSP $ Free (Or (replace z (unsafeCoerce f) rsps') next')
-        rsp' -> rsp'
-      _ -> pure (Blocked $ RSP $ Free $ Or (map collapse as) next)
-
--- And
-runRSP e (RSP (Free (And rsps next))) = do
-  as <- traverse (runRSP e) rsps
-  case traverse isDone as of
-    Just as' -> pure (Next $ RSP $ next as')
-    Nothing -> case focus isCont as of
-      Just (Cont e b f, z) -> do
-        traceIO "CONT"
-        pure $ Cont e b $ \rsp -> case rsp of
-          RSP (Free (And rsps' next')) -> RSP $ Free (And (replace z (unsafeCoerce f) rsps') next')
-          rsp' -> error "Cont: And"
-      _ -> if any isBlocked as
-        then pure (Blocked $ RSP $ Free $ And (map collapse as) next)
-        else pure (Next $ RSP $ Free $ And (map collapse as) next)
-  where
-    isBlocked (Done _) = False
-    isBlocked (Blocked _) = True
-    isBlocked (Next _) = False
-
-collapse (Done a) = RSP (Pure a)
-collapse (Blocked a) = a
-collapse (Next b) = b
-
-run :: RSP () -> IO Context
-run rsp = Context <$> newMVar (Just rsp)
-
---------------------------------------------------------------------------------
-
-data F f a = P a | F Int (f (F f a))
-
-instance Functor f => Functor (F f) where
-  fmap f = go where
-    go (P a)  = P (f a)
-    go (F x fa) = F x (go <$> fa)
-  {-# INLINE fmap #-}
-
-instance Functor f => Applicative (F f) where
-  pure = P
-  {-# INLINE pure #-}
-
-  -- TODO
-  f' <*> a' = do
-    f <- f'
-    a <- a'
-    pure (f a)
-
-instance Functor f => Monad (F f) where
-  return = P
-  {-# INLINE return #-}
-  P a >>= f = f a
-  F x m >>= f = F (x + 1) ((>>= f) <$> m)
 
 --------------------------------------------------------------------------------
 
@@ -258,7 +109,7 @@ replace' (Focus _ xs _) a bs
 
 --------------------------------------------------------------------------------
 
-data K a = forall v. K (IEvent v) v (RSP a) ([Int] -> RSP a -> R a)
+data K a = forall v. K (Event v) v (RSP a) ([Int] -> RSP a -> R a)
 
 data R a
   = D a
@@ -278,7 +129,7 @@ allDone = undefined
 blocked :: [R a] -> Maybe [RSP a]
 blocked = undefined
 
-completeRSP :: [Int] -> Maybe (IEvent b, b) -> RSP a -> R a
+completeRSP :: [Int] -> Maybe (Event b, b) -> RSP a -> R a
 
 completeRSP _ _ (RSP (Pure a)) = D a
 
@@ -287,17 +138,17 @@ completeRSP i _ rsp@(RSP (Free Forever)) = B i rsp
 -- completeRSP _ _ (RSP (Free (Async io next))) = A io (RSP next)
 
 completeRSP i@(n:ns) e (RSP (Free (Local f next))) =
-  completeRSP (n + 1:ns) e (f (IEvent i) >> RSP next)
+  completeRSP (n + 1:ns) e (f (Event i) >> RSP next)
 
-completeRSP i@(n:ns) (Just (IEvent e, v)) rsp@(RSP (Free (AwaitI (IEvent e') next))) =
+completeRSP i@(n:ns) (Just (Event e, v)) rsp@(RSP (Free (Await (Event e') next))) =
   if e == e'
     then completeRSP (n + 1:ns) Nothing (RSP $ next $ unsafeCoerce v)
     else B i rsp
 
-completeRSP i@(n:ns) _ (RSP (Free (EmitI e v _))) =
+completeRSP i@(n:ns) _ (RSP (Free (Emit e v _))) =
   -- Set a temporary 'forever' placeholder so that the emit isn't reevaluated
   C $ K e v forever $ \i' rsp -> case rsp of
-    RSP (Free (EmitI _ _ next))
+    RSP (Free (Emit _ _ next))
       | i == i' -> completeRSP (n + 1:ns) Nothing (RSP next)
     _ -> B i' rsp
 
@@ -338,7 +189,6 @@ runR :: [Int] -> [([Int], [Int] -> RSP a -> R a)] -> R a -> IO a
 runR _ _ (D a) = pure a
 runR _ [] (B _ rsp) = error "Program blocked"
 runR _ ((i, k):ks) (B i' rsp) = runR i' ks (k i rsp)
--- TODO: index propagation
 runR i ks (C (K e v rsp k)) = runR (error "runR") ((i, k):ks) rsp'
   where
     rsp' = completeRSP i (Just (e, v)) rsp
@@ -348,7 +198,7 @@ runProgram rsp = case completeRSP [0] Nothing rsp of
   b@(B i next) -> runR i [] b
 
 p1 = runProgram $ local $ \e -> do
-  (a, _) <- orr [ Left <$> awaitI e, Right <$> emitI e "asd" ]
+  (a, _) <- orr [ Left <$> await e, Right <$> emit e "asd" ]
   pure $ trace ("A: " <> show a) ()
 
 --------------------------------------------------------------------------------
@@ -377,40 +227,40 @@ p1 = runProgram $ local $ \e -> do
 
 --------------------------------------------------------------------------------
 
-testRSP :: RSP ()
-testRSP = undefined
-
-type Application a = (a -> IO Context) -> IO Context
-
-server :: Application (Event String)
-server app = do
-  e <- newEvent
-  ctx <- app e
-  emit ctx e "a"
-  emit ctx e "b"
-  pure ctx
-
-m = server $ \x -> server $ \y -> server $ \z -> run $ do
-  a <- andd [ await x, await y, await z ]
-  async $ traceIO $ show a
-  a <- fst <$> orr [ await x, await y, await z ]
-  async $ traceIO a
-
-m2 = server $ \x -> server $ \y -> server $ \z -> run $ do
-  a <- andd [ await x, await x, await x ]
-  async $ traceIO $ show a
-  a <- andd [ await x, await x, await x ]
-  async $ traceIO $ show a
-
-boot :: Application (Event ())
-boot app = do
-  boot <- newEvent
-  ctx <- app boot
-  emit ctx boot ()
-  pure ctx
-
-m3 = boot $ \b -> run $ local $ \e -> do
-  await b
-  async $ traceIO "BOOTED"
-  a <- andd [ Left <$> awaitI e, Right <$> emitI e "asd" ]
-  async $ print a
+-- testRSP :: RSP ()
+-- testRSP = undefined
+-- 
+-- type Application a = (a -> IO Context) -> IO Context
+-- 
+-- server :: Application (Event String)
+-- server app = do
+--   e <- newEvent
+--   ctx <- app e
+--   emit ctx e "a"
+--   emit ctx e "b"
+--   pure ctx
+-- 
+-- m = server $ \x -> server $ \y -> server $ \z -> run $ do
+--   a <- andd [ await x, await y, await z ]
+--   async $ traceIO $ show a
+--   a <- fst <$> orr [ await x, await y, await z ]
+--   async $ traceIO a
+-- 
+-- m2 = server $ \x -> server $ \y -> server $ \z -> run $ do
+--   a <- andd [ await x, await x, await x ]
+--   async $ traceIO $ show a
+--   a <- andd [ await x, await x, await x ]
+--   async $ traceIO $ show a
+-- 
+-- boot :: Application (Event ())
+-- boot app = do
+--   boot <- newEvent
+--   ctx <- app boot
+--   emit ctx boot ()
+--   pure ctx
+-- 
+-- m3 = boot $ \b -> run $ local $ \e -> do
+--   await b
+--   async $ traceIO "BOOTED"
+--   a <- andd [ Left <$> awaitI e, Right <$> emitI e "asd" ]
+--   async $ print a
