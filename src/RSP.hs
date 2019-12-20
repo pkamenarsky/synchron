@@ -182,9 +182,9 @@ resume rsps (K e v k) z = C $ K e v $ \rsp -> case rsp of
      a <- k (get z)
 
      case a of
-       D a         -> advanceRSP (RSP $ Free $ Or (replace z (RSP $ Pure $ unsafeCoerce a) rsps') next')
-       B rsp       -> advanceRSP (RSP $ Free $ Or (replace z (unsafeCoerce rsp) rsps') next')
-       C k         -> pure (resume rsps k z)
+       D a   -> advanceRSP (RSP $ Free $ Or (replace z (RSP $ Pure $ unsafeCoerce a) rsps') next')
+       B rsp -> advanceRSP (RSP $ Free $ Or (replace z (unsafeCoerce rsp) rsps') next')
+       C k   -> pure (resume rsps k z)
    _ -> error "advanceRSP: Or"
 
 run :: [RSP a -> IO (R a)] -> Maybe (Event b, b) -> RSP a -> IO a
@@ -193,16 +193,18 @@ run ks Nothing rsp = do
   r <- advanceRSP rsp
   go ks r
   where
-    go []     (D a) = pure a
-    go _      (D _) = error "Done, but stack not empty"
-    go []     (B _) = error "Program blocked"
-    go (k:ks) (B _) = do
-      r <- k rsp
-      go ks r
+    go []     _ (D a)   = pure a
+    go _      _ (D _)   = error "Done, but stack not empty"
+    go []     _ (B _)   = error "Program blocked"
+    go (k:ks) _ (B rsp') = do
+      r <- k rsp'
+      go [] r
     go ks (C (K e v k)) = run (k:ks) (Just (e, v)) rsp
 
 runProgram :: RSP a -> IO a
 runProgram = run [] Nothing
+
+--------------------------------------------------------------------------------
 
 p1 = runProgram $ local $ \e -> do
   (a, _) <- orr [ Left <$> await e, Right <$> emit e "asd" ]
