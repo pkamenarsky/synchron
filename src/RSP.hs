@@ -193,7 +193,7 @@ resume hole (K e v k) z = C hole $ K e v $ \rsp -> do
   a <- k (get z)
 
   case a of
-    D a    -> advanceRSP (advanceFocused z (RSP $ Pure $ unsafeCoerce a) rsp)
+    D a    -> advanceRSP (advanceFocused z (RSP $ Pure a) rsp)
     B rsp' -> advanceRSP (advanceFocused z rsp' rsp)
     C _ k  -> pure (resume hole k z)
 
@@ -224,7 +224,7 @@ p1 = runRSP $ local $ \e -> do
   pure a
 
 p2 = runRSP $ local $ \e -> do
-  a <- andd [ Left <$> emit e "asd", Right <$> await e ]
+  a <- andd [ Left <$> emit e "E", Right <$> await e ]
   pure a
 
 p3 = runRSP $ local $ \e -> local $ \f -> do
@@ -242,6 +242,22 @@ p4 = runRSP $ local $ \e -> local $ \f -> do
     , Left  <$> andd [ Left <$> pure "_", Right <$> (await f >> emit e "E") ]
     ]
   pure a
+
+p5 = runRSP $ local $ \e -> do
+  andd
+    [ Left  <$> go 0 e
+    , Right <$> do
+        emit e (Left 4)
+        emit e (Right ())
+    ]
+  where
+    go :: Int -> Event (Either Int ()) -> RSP Int
+    go s e = do
+      a <- await e
+      async $ traceIO (show a)
+      case a of
+        Left n  -> go (s + n) e
+        Right _ -> pure s
 
 --------------------------------------------------------------------------------
 
