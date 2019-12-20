@@ -12,9 +12,7 @@ import Control.Concurrent
 import Control.Monad.Free
 
 import Data.IORef
-import Data.Either (isLeft)
 
-import System.IO.Unsafe (unsafePerformIO)
 import Unsafe.Coerce (unsafeCoerce)
 
 import Debug.Trace
@@ -30,7 +28,7 @@ data RSPF next
 
   | Forever
 
-  | forall a. Local (Event a -> RSP ()) next
+  | forall a b. Local (Event a -> RSP b) (b -> next)
   | forall a. Emit (Event a) a next
   | forall a. Await (Event a) (a -> next)
 
@@ -45,8 +43,8 @@ newtype RSP a = RSP { getRSP :: Free RSPF a }
 async :: IO () -> RSP ()
 async io = RSP $ liftF (Async io ())
 
-local :: (Event a -> RSP ()) -> RSP ()
-local f = RSP $ liftF (Local f ())
+local :: (Event a -> RSP b) -> RSP b
+local f = RSP $ liftF (Local f id)
 
 emit :: Event a -> a -> RSP ()
 emit e a = RSP $ liftF (Emit e a ())
@@ -159,7 +157,7 @@ advanceRSP rsp@(RSP (Free (Async io next))) = do
 -- Local
 advanceRSP (RSP (Free (Local f next))) = do
   eid <- newIORef ()
-  advanceRSP (f (Event eid) >> RSP next)
+  advanceRSP (f (Event eid) >>= RSP . next)
 -- Await
 advanceRSP rsp@(RSP (Free (Await _ _))) = pure (B rsp)
 -- Emit
@@ -185,43 +183,65 @@ advanceRSP rsp@(RSP (Free (And rsps next))) = do
       Left (k, z) -> pure (resume rsp k z)
       Right rsps' -> pure (B $ RSP $ Free $ And rsps' next)
 
+advanceFocused :: Focus (RSP a) -> RSP a -> RSP b -> RSP b
+advanceFocused z rsp (RSP (Free (Or rsps next)))  = RSP $ Free $ Or  (replace z (unsafeCoerce rsp) rsps) next
+advanceFocused z rsp (RSP (Free (And rsps next))) = RSP $ Free $ And (replace z (unsafeCoerce rsp) rsps) next
+advanceFocused _ _ _ = error "advanceFocused"
+
 resume :: RSP b -> K a -> Focus (RSP a) -> R b
-resume hole (K e v k) z = C hole $ K e v $ \rsp -> case rsp of
-   RSP (Free (Or rsps' next')) -> do
-     a <- k (get z)
+resume hole (K e v k) z = C hole $ K e v $ \rsp -> do
+  a <- k (get z)
 
-     case a of
-       D a   -> advanceRSP (RSP $ Free $ Or (replace z (RSP $ Pure $ unsafeCoerce a) rsps') next')
-       B rsp -> advanceRSP (RSP $ Free $ Or (replace z (unsafeCoerce rsp) rsps') next')
-       C _ k -> pure (resume hole k z)
-   RSP (Free (And rsps' next')) -> do
-     a <- k (get z)
+  case a of
+    D a    -> advanceRSP (advanceFocused z (RSP $ Pure $ unsafeCoerce a) rsp)
+    B rsp' -> advanceRSP (advanceFocused z rsp' rsp)
+    C _ k  -> pure (resume hole k z)
 
-     case a of
-       D a   -> advanceRSP (RSP $ Free $ And (replace z (RSP $ Pure $ unsafeCoerce a) rsps') next')
-       B rsp -> advanceRSP (RSP $ Free $ And (replace z (unsafeCoerce rsp) rsps') next')
-       C _ k -> pure (resume hole k z)
-   _ -> error "advanceRSP"
+--------------------------------------------------------------------------------
 
-runRSP' :: [RSP a -> IO (R a)] -> Maybe (Event b, b) -> RSP a -> IO a
+data Result a = Done a | ProgramBlocked | StackNotEmpty
+  deriving Show
+
+runRSP' :: [RSP a -> IO (R a)] -> Maybe (Event b, b) -> RSP a -> IO (Result a)
 runRSP' ks (Just (e, a)) rsp = runRSP' ks Nothing (reactRSP e a rsp)
 runRSP' [] Nothing rsp       = advanceRSP rsp >>= runR []
 runRSP' (k:ks) Nothing rsp   = k rsp >>= runR ks
 
-runR :: [RSP a -> IO (R a)] -> R a -> IO a
-runR []     (D a)          = pure a
-runR (k:ks) (D a)          = error "Done, but stack not empty"
+runR :: [RSP a -> IO (R a)] -> R a -> IO (Result a)
+runR []     (D a)          = pure (Done a)
+runR (k:ks) (D a)          = pure StackNotEmpty
+runR []     (B _)          = pure ProgramBlocked
 runR ks     (B rsp')       = runRSP' ks Nothing rsp'
 runR ks (C rsp' (K e v k)) = runRSP' (k:ks) (Just (e, v)) rsp'
 
-runRSP :: RSP a -> IO a
+runRSP :: RSP a -> IO (Result a)
 runRSP = runRSP' [] Nothing
 
 p1 = runRSP $ local $ \e -> do
   a <- andd [ Left <$> ((,) <$> await e <*> await e), Right <$> emit e "A", Right <$> emit e "C" ]
   async $ traceIO (show a)
   a <- orr [ Left <$> await e, Right <$> emit e "B" ]
-  async $ traceIO (show a)
+  pure a
+
+p2 = runRSP $ local $ \e -> do
+  a <- andd [ Left <$> emit e "asd", Right <$> await e ]
+  pure a
+
+p3 = runRSP $ local $ \e -> local $ \f -> do
+  a <- andd
+    [ Left  <$> (await e >> emit f "F")
+    , Right <$> await f
+    , Left  <$> emit e "E"
+    ]
+  pure a
+
+p4 = runRSP $ local $ \e -> local $ \f -> do
+  a <- andd
+    [ Left  <$> andd [ Left <$> await e, Right <$> emit f "F" ]
+    , Right <$> await f
+    , Left  <$> andd [ Left <$> pure "_", Right <$> (await f >> emit e "E") ]
+    ]
+  pure a
 
 --------------------------------------------------------------------------------
 
