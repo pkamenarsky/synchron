@@ -21,7 +21,7 @@ import Debug.Trace
 
 --------------------------------------------------------------------------------
 
-type EventId = Int
+type EventId = IORef ()
 
 data Event a = Event EventId
 
@@ -96,7 +96,7 @@ replace (Focus _ xs _) a bs
 
 --------------------------------------------------------------------------------
 
-data K a = forall v. K (Event v) v (RSP a -> R a)
+data K a = forall v. K (Event v) v (RSP a -> IO (R a))
 
 data R a
   = D a
@@ -144,39 +144,50 @@ reactRSP event@(Event e) a rsp@(RSP (Free (And rsps next)))
 -- _
 reactRSP _ _ rsp = rsp
 
-advanceRSP :: RSP a -> R a
+advanceRSP :: RSP a -> IO (R a)
 -- Pure
-advanceRSP (RSP (Pure a))                = D a
+advanceRSP (RSP (Pure a))                = pure (D a)
 -- Forever
-advanceRSP rsp@(RSP (Free Forever))      = B rsp
+advanceRSP rsp@(RSP (Free Forever))      = pure (B rsp)
 -- Local
-advanceRSP (RSP (Free (Local f next)))   = advanceRSP (f (Event undefined) >> RSP next)
+advanceRSP (RSP (Free (Local f next)))   = do
+  eid <- newIORef ()
+  advanceRSP (f (Event eid) >> RSP next)
 -- Await
-advanceRSP rsp@(RSP (Free (Await _ _)))  = B rsp
+advanceRSP rsp@(RSP (Free (Await _ _)))  = pure (B rsp)
 -- Emit
-advanceRSP (RSP (Free (Emit e v next)))  = C $ K e v $ \_ -> advanceRSP (RSP next)
+advanceRSP (RSP (Free (Emit e v next)))  = pure (C $ K e v $ \_ -> advanceRSP (RSP next))
 -- Or
-advanceRSP (RSP (Free (Or rsps next))) =
-  case anyDone (zip (map advanceRSP rsps) rsps) of
+advanceRSP (RSP (Free (Or rsps next))) = do
+  as <- traverse advanceRSP rsps
+
+  case anyDone (zip as rsps) of
       Left (a, z) -> advanceRSP (RSP $ next (a, without z))
       Right rbcs  -> case anyCont (zip rbcs rsps) of
-        Left (k, z) -> resume rsps k z
-        Right rsps' -> B $ RSP $ Free $ Or rsps' next
+        Left (k, z) -> pure (resume rsps k z)
+        Right rsps' -> pure (B $ RSP $ Free $ Or rsps' next)
 -- And
-advanceRSP (RSP (Free (And rsps next))) =
-  case allDone (map advanceRSP rsps) of
+advanceRSP (RSP (Free (And rsps next))) = do
+  as <- traverse advanceRSP rsps
+
+  case allDone as of
     Left as    -> advanceRSP (RSP $ next as)
     Right rbcs -> case anyCont (zip rbcs rsps) of
-      Left (k, z) -> resume rsps k z
-      Right rsps' -> B $ RSP $ Free $ And rsps' next
+      Left (k, z) -> pure (resume rsps k z)
+      Right rsps' -> pure (B $ RSP $ Free $ And rsps' next)
 
 resume :: [RSP a] -> K a -> Focus (RSP a) -> R b
 resume rsps (K e v k) z = C $ K e v $ \rsp -> case rsp of
-   RSP (Free (Or rsps' next')) -> case k (get z) of
-         D a         -> advanceRSP (RSP $ Free $ Or (replace z (RSP $ Pure $ unsafeCoerce a) rsps') next')
-         B rsp       -> advanceRSP (RSP $ Free $ Or (replace z (unsafeCoerce rsp) rsps') next')
-         C k         -> resume rsps k z
+   RSP (Free (Or rsps' next')) -> do
+     a <- k (get z)
+
+     case a of
+       D a         -> advanceRSP (RSP $ Free $ Or (replace z (RSP $ Pure $ unsafeCoerce a) rsps') next')
+       B rsp       -> advanceRSP (RSP $ Free $ Or (replace z (unsafeCoerce rsp) rsps') next')
+       C k         -> pure (resume rsps k z)
    _ -> error "advanceRSP: Or"
+
+
 
 -- runR :: [Int] -> [([Int], [Int] -> RSP a -> R a)] -> R a -> IO a
 -- runR _ _ (D a) = pure a
