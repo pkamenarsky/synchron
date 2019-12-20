@@ -165,23 +165,23 @@ advanceRSP rsp@(RSP (Free (Await _ _)))     = pure (B rsp)
 -- Emit
 advanceRSP (RSP (Free (Emit e v next)))     = pure (C forever $ K e v $ \_ -> advanceRSP (RSP next))
 -- Or
-advanceRSP (RSP (Free (Or rsps next))) = do
+advanceRSP rsp@(RSP (Free (Or rsps next))) = do
   as <- traverse advanceRSP rsps
 
   case anyDone (zip as rsps) of
       Left (a, z) -> advanceRSP (RSP $ next (a, without z))
       Right rbcs  -> case anyCont (zip rbcs rsps) of
         -- TODO: remove forever
-        Left (k, z) -> pure (resume (RSP $ Free $ Or (replace z forever rsps) next) k z)
+        Left (k, z) -> pure (resume rsp k z)
         Right rsps' -> pure (B $ RSP $ Free $ Or rsps' next)
 -- And
-advanceRSP (RSP (Free (And rsps next))) = do
+advanceRSP rsp@(RSP (Free (And rsps next))) = do
   as <- traverse advanceRSP rsps
 
   case allDone as of
     Left as    -> advanceRSP (RSP $ next as)
     Right rbcs -> case anyCont (zip rbcs rsps) of
-      Left (k, z) -> pure (resume (RSP $ Free $ And (replace z forever rsps) next) k z)
+      Left (k, z) -> pure (resume rsp k z)
       Right rsps' -> pure (B $ RSP $ Free $ And rsps' next)
 
 resume :: RSP b -> K a -> Focus (RSP a) -> R b
@@ -190,40 +190,33 @@ resume hole (K e v k) z = C hole $ K e v $ \rsp -> case rsp of
      a <- k (get z)
 
      case a of
-       D a       -> advanceRSP (RSP $ Free $ Or (replace z (RSP $ Pure $ unsafeCoerce a) rsps') next')
-       B rsp     -> advanceRSP (RSP $ Free $ Or (replace z (unsafeCoerce rsp) rsps') next')
-       C hole' k -> pure (resume hole k z)
+       D a   -> advanceRSP (RSP $ Free $ Or (replace z (RSP $ Pure $ unsafeCoerce a) rsps') next')
+       B rsp -> advanceRSP (RSP $ Free $ Or (replace z (unsafeCoerce rsp) rsps') next')
+       C _ k -> pure (resume hole k z)
    RSP (Free (And rsps' next')) -> do
      a <- k (get z)
 
      case a of
-       D a       -> advanceRSP (RSP $ Free $ And (replace z (RSP $ Pure $ unsafeCoerce a) rsps') next')
-       B rsp     -> advanceRSP (RSP $ Free $ And (replace z (unsafeCoerce rsp) rsps') next')
-       C hole' k -> pure (resume hole k z)
+       D a   -> advanceRSP (RSP $ Free $ And (replace z (RSP $ Pure $ unsafeCoerce a) rsps') next')
+       B rsp -> advanceRSP (RSP $ Free $ And (replace z (unsafeCoerce rsp) rsps') next')
+       C _ k -> pure (resume hole k z)
    _ -> error "advanceRSP: Or"
 
-run :: [RSP a -> IO (R a)] -> Maybe (Event b, b) -> RSP a -> IO a
-run ks (Just (e, a)) rsp = traceIO "react" >> run ks Nothing (reactRSP e a rsp)
-run ks Nothing rsp = do
-  case ks of
-    [] -> do
-      r <- advanceRSP rsp
-      traceIO $ "advanced1, " <> show (length ks)
-      go rsp ks r
-    (k:ks) -> do
-      r <- k rsp
-      traceIO $ "advanced2, " <> show (length ks)
-      go rsp ks r
-  where
-    go _ []     (D a)    = traceIO "done" >> pure a
-    go _ (k:ks) (D a)    = error "Done, but stack not empty"
-    go _ ks     (B rsp') = traceIO "blocked" >> run ks Nothing rsp'
-    go _ ks (C rsp' (K e v k)) = traceIO "resume" >> run (k:ks) (Just (e, v)) rsp'
+runRSP' :: [RSP a -> IO (R a)] -> Maybe (Event b, b) -> RSP a -> IO a
+runRSP' ks (Just (e, a)) rsp = runRSP' ks Nothing (reactRSP e a rsp)
+runRSP' [] Nothing rsp       = advanceRSP rsp >>= runR []
+runRSP' (k:ks) Nothing rsp   = k rsp >>= runR ks
 
-runProgram :: RSP a -> IO a
-runProgram = run [] Nothing
+runR :: [RSP a -> IO (R a)] -> R a -> IO a
+runR []     (D a)          = pure a
+runR (k:ks) (D a)          = error "Done, but stack not empty"
+runR ks     (B rsp')       = runRSP' ks Nothing rsp'
+runR ks (C rsp' (K e v k)) = runRSP' (k:ks) (Just (e, v)) rsp'
 
-p1 = runProgram $ local $ \e -> do
+runRSP :: RSP a -> IO a
+runRSP = runRSP' [] Nothing
+
+p1 = runRSP $ local $ \e -> do
   a <- andd [ Left <$> ((,) <$> await e <*> await e), Right <$> emit e "A", Right <$> emit e "C" ]
   async $ traceIO (show a)
   a <- orr [ Left <$> await e, Right <$> emit e "B" ]
