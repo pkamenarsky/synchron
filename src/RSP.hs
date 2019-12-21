@@ -170,7 +170,6 @@ advanceRSP rsp@(RSP (Free (Or rsps next))) = do
   case anyDone (zip as rsps) of
       Left (a, z) -> advanceRSP (RSP $ next (a, without z))
       Right rbcs  -> case anyCont (zip rbcs rsps) of
-        -- TODO: remove forever
         Left (k, z) -> pure (resume rsp k z)
         Right rsps' -> pure (B $ RSP $ Free $ Or rsps' next)
 -- And
@@ -203,16 +202,18 @@ data Result a = Done a | ProgramBlocked | StackNotEmpty
   deriving Show
 
 runRSP' :: [RSP a -> IO (R a)] -> Maybe (Event b, b) -> RSP a -> IO (Result a)
-runRSP' ks (Just (e, a)) rsp = runRSP' ks Nothing (reactRSP e a rsp)
-runRSP' [] Nothing rsp       = advanceRSP rsp >>= runR []
-runRSP' (k:ks) Nothing rsp   = k rsp >>= runR ks
+runRSP' ks (Just (e, a)) rsp = traceIO "react" >> runRSP' ks Nothing (reactRSP e a rsp)
+runRSP' [] Nothing rsp       = traceIO "advance" >> (advanceRSP rsp >>= runR [])
+runRSP' (k:ks) Nothing rsp   = traceIO "resume" >> (k rsp >>= runR ks)
 
 runR :: [RSP a -> IO (R a)] -> R a -> IO (Result a)
 runR []     (D a)          = pure (Done a)
 runR (k:ks) (D a)          = pure StackNotEmpty
 runR []     (B _)          = pure ProgramBlocked
-runR ks     (B rsp')       = runRSP' ks Nothing rsp'
-runR ks (C rsp' (K e v k)) = runRSP' (k:ks) (Just (e, v)) rsp'
+runR ks     (B rsp')       = traceIO "blocked" >> runRSP' ks Nothing rsp'
+runR ks (C rsp' (K e v k)) = do
+  traceIO ("L: " <> show (length ks))
+  traceIO "continue" >> runRSP' (k:ks) (Just (e, v)) rsp'
 
 runRSP :: RSP a -> IO (Result a)
 runRSP = runRSP' [] Nothing
@@ -248,13 +249,18 @@ p5 = runRSP $ local $ \e -> do
     [ Left  <$> go 0 e
     , Right <$> do
         emit e (Left 4)
+        async $ traceIO "0"
+        emit e (Left 4)
+        async $ traceIO "1"
+        emit e (Left 4)
+        async $ traceIO "2"
+        emit e (Left 4)
         emit e (Right ())
     ]
   where
     go :: Int -> Event (Either Int ()) -> RSP Int
     go s e = do
       a <- await e
-      async $ traceIO (show a)
       case a of
         Left n  -> go (s + n) e
         Right _ -> pure s
