@@ -218,6 +218,8 @@ runR ks (C rsp' (K e v k)) = do
 runRSP :: RSP a -> IO (Result a)
 runRSP = runRSP' [] Nothing
 
+--------------------------------------------------------------------------------
+
 p1 = runRSP $ local $ \e -> do
   a <- andd [ Left <$> ((,) <$> await e <*> await e), Right <$> emit e "A", Right <$> emit e "C" ]
   async $ traceIO (show a)
