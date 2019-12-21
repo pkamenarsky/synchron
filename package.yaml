@@ -25,6 +25,8 @@ dependencies:
 - async
 - broadcast-chan
 - free
+- lens
+- transformers
 - http-types
 - transformers
 - stm

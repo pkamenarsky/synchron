@@ -10,6 +10,9 @@ module RSP where
 
 import Control.Concurrent
 import Control.Monad.Free
+import Control.Monad.IO.Class
+import qualified Control.Monad.Trans.State as ST
+import qualified Control.Lens as L
 
 import Data.IORef
 
@@ -194,7 +197,55 @@ resume hole (K e v k) z = C hole $ K e v $ \rsp -> do
   case a of
     D a    -> advanceRSP (advanceFocused z (RSP $ Pure a) rsp)
     B rsp' -> advanceRSP (advanceFocused z rsp' rsp)
-    C _ k  -> pure (resume hole k z)
+    C _ k  -> pure (resume rsp k z)
+
+--------------------------------------------------------------------------------
+
+rspsL :: L.Lens' (RSP a) [RSP b]
+rspsL = L.lens get set
+  where
+    get (RSP (Free (Or rsps _))) = unsafeCoerce rsps
+    get (RSP (Free (And rsps _))) = unsafeCoerce rsps
+
+    set (RSP (Free (Or _ next))) rsps = RSP (Free (Or (unsafeCoerce rsps) next))
+    set (RSP (Free (And _ next))) rsps = RSP (Free (And (unsafeCoerce rsps) next))
+
+ix :: Int -> L.Lens' [a] a
+ix i = L.lens get set
+  where
+    get ls = ls !! i
+    set ls a = take i ls <> [a] <> drop (i + 1) ls
+
+advanceST :: L.Lens' (RSP a) (RSP b) -> RSP b -> ST.StateT (RSP a) IO ()
+advanceST l rsp@(RSP (Pure a)) = L.zoom l $ ST.put rsp
+advanceST l rsp@(RSP (Free (Await _ _))) = L.zoom l $ ST.put rsp
+advanceST l (RSP (Free (Local f next))) = do
+  eid <- liftIO $ newIORef ()
+  advanceST l (f (Event eid) >>= RSP . next)
+advanceST l (RSP (Free (Async io next))) = do
+  liftIO $ forkIO io
+  advanceST l (RSP next)
+advanceST l (RSP (Free (Emit e a next))) = do
+  ST.modify (reactRSP e a)
+  advanceST l (RSP next)
+advanceST l (RSP (Free (And rsps _))) = do
+  sequence_ [ advanceST (l . rspsL . ix i) rsp | (i, rsp) <- zip [0..] rsps ]
+
+  RSP (Free (And rsps next)) <- L.zoom l $ ST.get
+  
+  case traverse rspDone rsps of
+    Just as -> advanceST l (RSP (next as))
+    Nothing -> pure ()
+    
+rspDone (RSP (Pure a)) = Just a
+rspDone _ = Nothing
+
+runST :: RSP a -> IO (Result a)
+runST rsp = do
+  (_, st) <- ST.runStateT (advanceST id rsp) rsp
+  case st of
+    RSP (Pure a) -> pure (Done a)
+    _            -> pure ProgramBlocked
 
 --------------------------------------------------------------------------------
 
@@ -202,18 +253,16 @@ data Result a = Done a | ProgramBlocked | StackNotEmpty
   deriving Show
 
 runRSP' :: [RSP a -> IO (R a)] -> Maybe (Event b, b) -> RSP a -> IO (Result a)
-runRSP' ks (Just (e, a)) rsp = traceIO "react" >> runRSP' ks Nothing (reactRSP e a rsp)
-runRSP' [] Nothing rsp       = traceIO "advance" >> (advanceRSP rsp >>= runR [])
-runRSP' (k:ks) Nothing rsp   = traceIO "resume" >> (k rsp >>= runR ks)
+runRSP' ks (Just (e, a)) rsp = runRSP' ks Nothing rsp
+runRSP' [] Nothing rsp       = advanceRSP rsp >>= runR []
+runRSP' (k:ks) Nothing rsp   = k rsp >>= runR ks
 
 runR :: [RSP a -> IO (R a)] -> R a -> IO (Result a)
-runR []     (D a)          = pure (Done a)
-runR (k:ks) (D a)          = pure StackNotEmpty
-runR []     (B _)          = pure ProgramBlocked
-runR ks     (B rsp')       = traceIO "blocked" >> runRSP' ks Nothing rsp'
-runR ks (C rsp' (K e v k)) = do
-  traceIO ("L: " <> show (length ks))
-  traceIO "continue" >> runRSP' (k:ks) (Just (e, v)) rsp'
+runR []     (D a)         = pure (Done a)
+runR (k:ks) (D a)         = pure StackNotEmpty
+runR []     (B _)         = pure ProgramBlocked
+runR ks     (B rsp)       = runRSP' ks Nothing rsp
+runR ks (C rsp (K e v k)) = runRSP' (k:ks) (Just (e, v)) rsp
 
 runRSP :: RSP a -> IO (Result a)
 runRSP = runRSP' [] Nothing
@@ -246,16 +295,13 @@ p4 = runRSP $ local $ \e -> local $ \f -> do
     ]
   pure a
 
-p5 = runRSP $ local $ \e -> do
+p5 = runST $ local $ \e -> do
   andd
     [ Left  <$> go 0 e
     , Right <$> do
-        emit e (Left 4)
-        async $ traceIO "0"
-        emit e (Left 4)
-        async $ traceIO "1"
-        emit e (Left 4)
-        async $ traceIO "2"
+        emit e (Left 1)
+        emit e (Left 2)
+        emit e (Left 3)
         emit e (Left 4)
         emit e (Right ())
     ]
@@ -263,6 +309,7 @@ p5 = runRSP $ local $ \e -> do
     go :: Int -> Event (Either Int ()) -> RSP Int
     go s e = do
       a <- await e
+      -- async $ traceIO "BLA"
       case a of
         Left n  -> go (s + n) e
         Right _ -> pure s
