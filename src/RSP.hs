@@ -15,6 +15,8 @@ import qualified Control.Monad.Trans.State as ST
 import qualified Control.Lens as L
 
 import Data.IORef
+import Data.List (intercalate)
+import Data.Maybe (listToMaybe, mapMaybe)
 
 import Unsafe.Coerce (unsafeCoerce)
 
@@ -26,6 +28,8 @@ type EventId = IORef ()
 
 data Event a = Event EventId
 
+type IsHole = Bool
+
 data RSPF next
   = Async (IO ()) next
 
@@ -35,13 +39,23 @@ data RSPF next
   | forall a. Emit (Event a) a next
   | forall a. Await (Event a) (a -> next)
 
-  | forall a. Or [RSP a] ((a, [RSP a]) -> next)
-  | forall a. And [RSP a] ([a] -> next)
+  | forall a. Or IsHole [RSP a] ((a, [RSP a]) -> next)
+  | forall a. And IsHole [RSP a] ([a] -> next)
 
 deriving instance Functor RSPF
 
 newtype RSP a = RSP { getRSP :: Free RSPF a }
   deriving (Functor, Applicative, Monad)
+
+instance Show (RSP a) where
+  show (RSP (Pure a)) = "Pure"
+  show (RSP (Free (Async _ _))) = "Async"
+  show (RSP (Free Forever)) = "Forever"
+  show (RSP (Free (Local _ _))) = "Local"
+  show (RSP (Free (Emit _ _ _))) = "Emit"
+  show (RSP (Free (Await _ _))) = "Await"
+  show (RSP (Free (Or _ rsps _))) = "Or [" <> intercalate " " (map show rsps) <> "]"
+  show (RSP (Free (And _ rsps _))) = "And [" <> intercalate " " (map show rsps) <> "]"
 
 async :: IO () -> RSP ()
 async io = RSP $ liftF (Async io ())
@@ -56,13 +70,13 @@ await :: Event a -> RSP a
 await e = RSP $ liftF (Await e id)
 
 orr' :: [RSP a] -> RSP (a, [RSP a])
-orr' rsps = RSP $ liftF (Or rsps id)
+orr' rsps = RSP $ liftF (Or False rsps id)
 
 orr :: [RSP a] -> RSP a
-orr rsps = fmap fst $ RSP $ liftF (Or rsps id)
+orr rsps = fmap fst $ RSP $ liftF (Or False rsps id)
 
 andd :: [RSP a] -> RSP [a]
-andd rsps = RSP $ liftF (And rsps id)
+andd rsps = RSP $ liftF (And False rsps id)
 
 forever :: RSP a
 forever = RSP $ liftF Forever
@@ -140,11 +154,11 @@ reactRSP (Event e) a rsp@(RSP (Free (Await (Event e') next))) = if e == e'
   then RSP $ next $ unsafeCoerce a
   else rsp
 -- Or
-reactRSP event@(Event e) a rsp@(RSP (Free (Or rsps next)))
-  = RSP $ Free $ Or (map (reactRSP event a) rsps) next
+reactRSP event@(Event e) a rsp@(RSP (Free (Or h rsps next)))
+  = RSP $ Free $ Or h (map (reactRSP event a) rsps) next
 -- And
-reactRSP event@(Event e) a rsp@(RSP (Free (And rsps next)))
-  = RSP $ Free $ And (map (reactRSP event a) rsps) next
+reactRSP event@(Event e) a rsp@(RSP (Free (And h rsps next)))
+  = RSP $ Free $ And h (map (reactRSP event a) rsps) next
 -- _
 reactRSP _ _ rsp = rsp
 
@@ -165,29 +179,29 @@ advanceRSP (RSP (Free (Local f next))) = do
 advanceRSP rsp@(RSP (Free (Await _ _))) = pure (B rsp)
 -- Emit
 advanceRSP rsp@(RSP (Free (Emit e v next)))
-  = pure (C rsp $ K e v $ \_ -> advanceRSP (RSP next))
+  = pure (C forever $ K e v $ \_ -> advanceRSP (RSP next))
 -- Or
-advanceRSP rsp@(RSP (Free (Or rsps next))) = do
+advanceRSP rsp@(RSP (Free (Or h rsps next))) = do
   as <- traverse advanceRSP rsps
 
   case anyDone (zip as rsps) of
-      Left (a, z) -> advanceRSP (RSP $ next (a, without z))
-      Right rbcs  -> case anyCont (zip rbcs rsps) of
-        Left (k, z) -> pure (resume rsp k z)
-        Right rsps' -> pure (B $ RSP $ Free $ Or rsps' next)
+    Left (a, z) -> advanceRSP (RSP $ next (a, without z))
+    Right rbcs  -> case anyCont (zip rbcs rsps) of
+      Left (k, z) -> pure (resume (RSP (Free (Or True rsps next))) k z)
+      Right rsps' -> pure (B $ RSP $ Free $ Or undefined rsps' next)
 -- And
-advanceRSP rsp@(RSP (Free (And rsps next))) = do
+advanceRSP rsp@(RSP (Free (And h rsps next))) = do
   as <- traverse advanceRSP rsps
 
   case allDone as of
     Left as    -> advanceRSP (RSP $ next as)
     Right rbcs -> case anyCont (zip rbcs rsps) of
-      Left (k, z) -> pure (resume rsp k z)
-      Right rsps' -> pure (B $ RSP $ Free $ And rsps' next)
+      Left (k, z) -> pure (resume (RSP (Free (And True rsps next))) k z)
+      Right rsps' -> pure (B $ RSP $ Free $ And undefined rsps' next)
 
 advanceFocused :: Focus (RSP a) -> RSP a -> RSP b -> RSP b
-advanceFocused z rsp (RSP (Free (Or rsps next)))  = RSP $ Free $ Or  (replace z (unsafeCoerce rsp) rsps) next
-advanceFocused z rsp (RSP (Free (And rsps next))) = RSP $ Free $ And (replace z (unsafeCoerce rsp) rsps) next
+advanceFocused z rsp (RSP (Free (Or h rsps next)))  = RSP $ Free $ Or  h (replace z (unsafeCoerce rsp) rsps) next
+advanceFocused z rsp (RSP (Free (And h rsps next))) = RSP $ Free $ And h (replace z (unsafeCoerce rsp) rsps) next
 advanceFocused _ _ _ = error "advanceFocused"
 
 resume :: RSP b -> K a -> Focus (RSP a) -> R b
@@ -204,11 +218,11 @@ resume hole (K e v k) z = C hole $ K e v $ \rsp -> do
 rspsL :: L.Lens' (RSP a) [RSP b]
 rspsL = L.lens get set
   where
-    get (RSP (Free (Or rsps _))) = unsafeCoerce rsps
-    get (RSP (Free (And rsps _))) = unsafeCoerce rsps
+    get (RSP (Free (Or _ rsps _))) = unsafeCoerce rsps
+    get (RSP (Free (And _ rsps _))) = unsafeCoerce rsps
 
-    set (RSP (Free (Or _ next))) rsps = RSP (Free (Or (unsafeCoerce rsps) next))
-    set (RSP (Free (And _ next))) rsps = RSP (Free (And (unsafeCoerce rsps) next))
+    set (RSP (Free (Or h _ next))) rsps = RSP (Free (Or h (unsafeCoerce rsps) next))
+    set (RSP (Free (And h _ next))) rsps = RSP (Free (And h (unsafeCoerce rsps) next))
 
 ix :: Int -> L.Lens' [a] a
 ix i = L.lens get set
@@ -216,33 +230,95 @@ ix i = L.lens get set
     get ls = ls !! i
     set ls a = take i ls <> [a] <> drop (i + 1) ls
 
-advanceST :: L.Lens' (RSP a) (RSP b) -> RSP b -> ST.StateT (RSP a) IO ()
-advanceST l rsp@(RSP (Pure a)) = L.zoom l $ ST.put rsp
-advanceST l rsp@(RSP (Free (Await _ _))) = L.zoom l $ ST.put rsp
-advanceST l (RSP (Free (Local f next))) = do
+-- This doesn't change structure
+reactRSP' :: Maybe (Event b, b) -> RSP a -> IO (RSP a)
+reactRSP' event rsp@(RSP (Free (Async io next))) = do
+  forkIO io
+  reactRSP' event (RSP next)
+reactRSP' event rsp@(RSP (Free (Local f next))) = do
   eid <- liftIO $ newIORef ()
-  advanceST l (f (Event eid) >>= RSP . next)
-advanceST l (RSP (Free (Async io next))) = do
-  liftIO $ forkIO io
-  advanceST l (RSP next)
-advanceST l (RSP (Free (Emit e a next))) = do
-  ST.modify (reactRSP e a)
-  advanceST l (RSP next)
-advanceST l (RSP (Free (And rsps _))) = do
-  sequence_ [ advanceST (l . rspsL . ix i) rsp | (i, rsp) <- zip [0..] rsps ]
+  reactRSP' event (f (Event eid) >>= RSP . next)
+reactRSP' (Just (Event e, a)) rsp@(RSP (Free (Await (Event e') next))) = if e == e'
+  then reactRSP' Nothing $ RSP $ next $ unsafeCoerce a
+  else pure rsp
+reactRSP' event rsp@(RSP (Free (Or h rsps next))) = do
+  rsps' <- traverse (reactRSP' event) rsps
+  pure $ RSP $ Free $ Or h rsps' next
+reactRSP' event rsp@(RSP (Free (And h rsps next))) = do
+  rsps' <- traverse (reactRSP' event) rsps
+  pure $ RSP $ Free $ And h rsps' next
+reactRSP' _ rsp = pure rsp
 
-  RSP (Free (And rsps next)) <- L.zoom l $ ST.get
+--------------------------------------------------------------------------------
+
+modifyM :: Monad m => (st -> ST.StateT st m b) -> ST.StateT st m b
+modifyM f = ST.get >>= f
+
+advanceST :: L.Lens' (RSP a) (RSP b) -> Maybe (Event c, c) -> RSP b -> ST.StateT (RSP a) IO ()
+advanceST l _ rsp@(RSP (Pure a)) = L.zoom l (ST.put rsp)
+advanceST l _ rsp@(RSP (Free Forever)) = L.zoom l (ST.put rsp)
+advanceST l (Just (Event e, a)) rsp@(RSP (Free (Await (Event e') next))) = do
+  if e == e'
+    then advanceST l Nothing (RSP $ next $ unsafeCoerce a)
+    else L.zoom l (ST.put rsp)
+advanceST l Nothing rsp@(RSP (Free (Await _ _))) = L.zoom l (ST.put rsp)
+advanceST l event rsp@(RSP (Free (Local f next))) = do
+  eid <- liftIO $ newIORef ()
+  advanceST l event (f (Event eid) >>= RSP . next)
+advanceST l event rsp@(RSP (Free (Async io next))) = do
+  liftIO $ forkIO io
+  advanceST l event (RSP next)
+advanceST l _ rsp@(RSP (Free (Emit event a next))) = do
+  L.zoom l (ST.put forever)
+  ST.get >>= advanceST id (Just (event, a))
+  advanceST l Nothing (RSP next)
+advanceST l event rsp@(RSP (Free (And h rsps _))) = do
+  sequence_
+    [ do
+        st <- ST.get
+        advanceST (l . rspsL . ix i) event (st L.^. (l . rspsL . ix i))
+    | (i, _) <- zip [0..] rsps
+    ]
+
+  st <- L.zoom l $ ST.get
+
+  case st of
+    rsp'@(RSP (Free (And h rsps next))) -> do
+      liftIO $ traceIO (show rsp')
   
-  case traverse rspDone rsps of
-    Just as -> advanceST l (RSP (next as))
-    Nothing -> pure ()
+      case traverse rspDone rsps of
+        Just as -> advanceST l Nothing (RSP (next $ unsafeCoerce as))
+        Nothing -> pure ()
+    rsp' -> advanceST l Nothing rsp'
+
+advanceST l event rsp@(RSP (Free (Or h rsps _))) = do
+  sequence_
+    [ do
+        st <- ST.get
+        advanceST (l . rspsL . ix i) event (st L.^. (l . rspsL . ix i))
+    | (i, _) <- zip [0..] rsps
+    ]
+
+  st <- L.zoom l $ ST.get
+
+  case st of
+    rsp'@(RSP (Free (Or h rsps next))) -> do
+      liftIO $ traceIO (show rsp')
+      
+      case firstJust rspDone rsps of
+        Just a  -> advanceST l Nothing (RSP (next (a, undefined)))
+        Nothing -> pure ()
+    rsp' -> advanceST l Nothing rsp'
     
 rspDone (RSP (Pure a)) = Just a
 rspDone _ = Nothing
 
+firstJust :: (a -> Maybe b) -> [a] -> Maybe b
+firstJust f = listToMaybe . mapMaybe f
+
 runST :: RSP a -> IO (Result a)
 runST rsp = do
-  (_, st) <- ST.runStateT (advanceST id rsp) rsp
+  (_, st) <- ST.runStateT (advanceST id Nothing rsp) rsp
   case st of
     RSP (Pure a) -> pure (Done a)
     _            -> pure ProgramBlocked
@@ -269,17 +345,17 @@ runRSP = runRSP' [] Nothing
 
 --------------------------------------------------------------------------------
 
-p1 = runRSP $ local $ \e -> do
+p1 = runST $ local $ \e -> do
   a <- andd [ Left <$> ((,) <$> await e <*> await e), Right <$> emit e "A", Right <$> emit e "C" ]
   async $ traceIO (show a)
   a <- orr [ Left <$> await e, Right <$> emit e "B" ]
   pure a
 
-p2 = runRSP $ local $ \e -> do
+p2 = runST $ local $ \e -> do
   a <- andd [ Left <$> emit e "E", Right <$> await e ]
   pure a
 
-p3 = runRSP $ local $ \e -> local $ \f -> do
+p3 = runST $ local $ \e -> local $ \f -> do
   a <- andd
     [ Left  <$> (await e >> emit f "F")
     , Right <$> await f
@@ -287,7 +363,7 @@ p3 = runRSP $ local $ \e -> local $ \f -> do
     ]
   pure a
 
-p4 = runRSP $ local $ \e -> local $ \f -> do
+p4 = runST $ local $ \e -> local $ \f -> do
   a <- andd
     [ Left  <$> andd [ Left <$> await e, Right <$> emit f "F" ]
     , Right <$> await f
@@ -309,7 +385,7 @@ p5 = runST $ local $ \e -> do
     go :: Int -> Event (Either Int ()) -> RSP Int
     go s e = do
       a <- await e
-      -- async $ traceIO "BLA"
+      async $ traceIO "BLA"
       case a of
         Left n  -> go (s + n) e
         Right _ -> pure s
