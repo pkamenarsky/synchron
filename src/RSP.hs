@@ -147,21 +147,6 @@ anyCont rs = case focus isCont rs of
     isCont (B rsp, _) = Right rsp
     isCont (D a, _)   = Right (RSP $ Pure a)
 
--- This doesn't change structure
-reactRSP :: Event b -> b -> RSP a -> RSP a
--- Await
-reactRSP (Event e) a rsp@(RSP (Free (Await (Event e') next))) = if e == e'
-  then RSP $ next $ unsafeCoerce a
-  else rsp
--- Or
-reactRSP event@(Event e) a rsp@(RSP (Free (Or h rsps next)))
-  = RSP $ Free $ Or h (map (reactRSP event a) rsps) next
--- And
-reactRSP event@(Event e) a rsp@(RSP (Free (And h rsps next)))
-  = RSP $ Free $ And h (map (reactRSP event a) rsps) next
--- _
-reactRSP _ _ rsp = rsp
-
 advanceRSP :: RSP a -> IO (R a)
 -- Pure
 advanceRSP (RSP (Pure a)) = pure (D a)
