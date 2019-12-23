@@ -239,24 +239,23 @@ run = go Nothing 0 0
         RSP (Pure a) -> pure a
         _ -> go e' n' eid' p'
 
---------------------------------------------------------------------------------
+-- Pools -----------------------------------------------------------------------
 
 data Pool = Pool (Event (RSP ()))
 
 pool :: (Pool -> RSP a) -> RSP a
-pool f = local (go [])
+pool f = local (\e -> go e [Left <$> f (Pool e), Right . Left <$> await e])
   where
-    go ks e = do
-      (r, ks) <- orr' $ concat
-        [ [ Left <$> f (Pool e) ]
-        , [ Right . Left <$> await e ]
-        , ks
-        ]
+    go e ks = do
+      (r, ks) <- orr' ks
       
       case r of
         Left a            -> pure a
-        (Right (Left p))  -> go (fmap (Right . Right) p:ks) e
-        (Right (Right _)) -> go ks e
+        (Right (Left p))  -> go e $ concat
+          [ [ Right . Left <$> await e ]
+          , fmap (Right . Right) p:ks
+          ]
+        (Right (Right _)) -> go e ks
 
 spawn :: Pool -> RSP () -> RSP ()
 spawn (Pool e) p = emit e p
