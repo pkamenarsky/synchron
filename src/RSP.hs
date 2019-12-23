@@ -114,18 +114,22 @@ isBlocked :: RSP a -> Int -> Bool
 isBlocked (RSP (Pure _)) _ = True
 isBlocked (RSP (Free (Await _ _))) _ = True
 isBlocked (RSP (Free (Canrun m _))) n = n > m
-isBlocked (RSP (Free (And p q _))) n = isBlocked p n && isBlocked q n
-isBlocked (RSP (Free (Or p q _))) n = isBlocked p n && isBlocked q n
+isBlocked (RSP (Free (AndU p q _))) n = isBlocked p n && isBlocked q n
+isBlocked (RSP (Free (OrU p q _))) n = isBlocked p n && isBlocked q n
 isBlocked _ _ = False
 
-step :: Maybe ExEvent -> Int -> RSP a -> (Maybe ExEvent, Int, RSP a, IO ())
+step
+  :: Maybe ExEvent
+  -> Int
+  -> RSP a
+  -> (Maybe ExEvent, Int, RSP a, IO ())
 
 -- push
 step (Just event) n p
-  = (Nothing, n + 1, bcast event p, pure ())
+  = trace "push" (Nothing, n + 1, bcast event p, pure ())
 -- pop
 step Nothing n p
-  | n > 0 || isBlocked p n = (Nothing, n - 1, p, pure ())
+  | n > 0 && isBlocked p n = trace "pop" (Nothing, n - 1, p, pure ())
 
 -- emit
 step Nothing n (RSP (Free (Emit e next)))
@@ -142,17 +146,6 @@ step Nothing n (RSP (Free (Async io next)))
 -- and-expd
 step Nothing n (RSP (Free (And p (RSP q) next)))
   = (Nothing, n, RSP (Free (AndU p (RSP (Free (Canrun n q))) next)), pure ())
--- and-adv1
-step Nothing n (RSP (Free (AndU p q next)))
-  | n == n' = (e, n, RSP (Free (AndU p' q next)), io)
-  where
-    (e, n', p', io) = step Nothing n p
--- and-adv2
-step Nothing n (RSP (Free (AndU p q next)))
-  |  isBlocked p n
-  && n == n'= (e, n, RSP (Free (AndU p q' next)), io)
-  where
-    (e, n', q', io) = step Nothing n q
 -- and-nop1
 step Nothing n (RSP (Free (AndU (RSP (Pure a)) q next)))
   = (Nothing, n, q' a, pure ())
@@ -167,34 +160,48 @@ step Nothing n (RSP (Free (AndU p (RSP (Pure b)) next)))
     p' b = do
       a <- p
       RSP (next [a, b])
+-- and-adv2
+step Nothing n (RSP (Free (AndU p q next)))
+  | isBlocked p n
+  && n == n' = (e, n, RSP (Free (AndU p q' next)), io)
+  where
+    (e, n', q', io) = step Nothing n q
+-- and-adv1
+step Nothing n (RSP (Free (AndU p q next)))
+  | n == n' = (e, n, RSP (Free (AndU p' q next)), io)
+  where
+    (e, n', p', io) = step Nothing n p
 
 -- or-expd
 step Nothing n (RSP (Free (Or p (RSP q) next)))
   = (Nothing, n, RSP (Free (OrU p (RSP (Free (Canrun n q))) next)), pure ())
--- or-adv1
-step Nothing n (RSP (Free (OrU p q next)))
-  | n == n' = (e, n, RSP (Free (OrU p' q next)), io)
-  where
-    (e, n', p', io) = step Nothing n p
--- or-adv2
-step Nothing n (RSP (Free (OrU p q next)))
-  | isBlocked p n
-  && n == n'= (e, n, RSP (Free (OrU p q' next)), io)
-  where
-    (e, n', q', io) = step Nothing n q
 -- or-nop1
 step Nothing n (RSP (Free (OrU (RSP (Pure a)) q next)))
   = (Nothing, n, RSP (next a), pure ())
 -- or-nop2
 step Nothing n (RSP (Free (OrU p (RSP (Pure b)) next)))
   | isBlocked p n = (Nothing, n, RSP (next b), pure ())
+-- or-adv2
+step Nothing n (RSP (Free (OrU p q next)))
+  | isBlocked p n
+  && n == n' = (e, n, RSP (Free (OrU p q' next)), io)
+  where
+    (e, n', q', io) = step Nothing n q
+-- or-adv1
+step Nothing n (RSP (Free (OrU p q next)))
+  | n == n' = (e, n, RSP (Free (OrU p' q next)), io)
+  where
+    (e, n', p', io) = step Nothing n p
 
-step e n p = error (show p)
+step e n p = error (isEvent e <> ", " <> show n <> ", " <> show p)
+  where
+    isEvent (Just _) = "EVENT"
+    isEvent Nothing  = "NOEVENT"
 
 --------------------------------------------------------------------------------
 
 run e n p = do
-  traceIO (show p)
+  traceIO (show n <> ", " <> show p)
   let (e', n', p', io) = step e n p
   io
   case p' of
