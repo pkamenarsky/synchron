@@ -241,27 +241,22 @@ run = go Nothing 0 0
 
 --------------------------------------------------------------------------------
 
--- many :: RSP (Either a [RSP ()]) -> RSP a
--- many k = do
---   go [ Left <$> k ]
---   where
---     go ks = do
---       a <- orr ks
---       undefined
--- 
--- done :: a -> RSP (Either a [RSP ()])
--- done a = pure (Left a)
--- 
--- spawn :: RSP () -> RSP (Either a [RSP ()])
--- spawn k = pure (Right [k])
--- 
--- data ST a
--- 
--- local' :: (ST a -> RSP b) -> RSP b
--- local' = undefined
--- 
--- with :: ST a -> (a -> [RSP a] -> Either a b) -> ST b
--- with = undefined
+data Pool = Pool (Event (RSP ()))
 
---------------------------------------------------------------------------------
-  
+pool :: (Pool -> RSP a) -> RSP a
+pool f = local (go [])
+  where
+    go ks e = do
+      (r, ks) <- orr' $ concat
+        [ [ Left <$> f (Pool e) ]
+        , [ Right . Left <$> await e ]
+        , ks
+        ]
+      
+      case r of
+        Left a            -> pure a
+        (Right (Left p))  -> go (fmap (Right . Right) p:ks) e
+        (Right (Right _)) -> go ks e
+
+spawn :: Pool -> RSP () -> RSP ()
+spawn (Pool e) p = emit e p
