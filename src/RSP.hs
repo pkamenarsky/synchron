@@ -63,7 +63,7 @@ instance Show (RSP a) where
   show (RSP (Free (And a b _))) = "And [" <> intercalate " " (map show [a, b]) <> "]"
   show (RSP (Free (OrU a b _))) = "OrU [" <> intercalate " " (map show [a, b]) <> "]"
   show (RSP (Free (AndU a b _))) = "AndU [" <> intercalate " " (map show [a, b]) <> "]"
-  show (RSP (Free (Canrun n p))) = "Canrun " <> show n
+  show (RSP (Free (Canrun n p))) = "Canrun " <> show n <> " (" <> show (RSP p) <> ")"
 
 async :: IO () -> RSP ()
 async io = RSP $ liftF (Async io ())
@@ -104,8 +104,14 @@ bcast (ExEvent (Event e) a) (RSP (Free (Await (Event e') next)))
   | e == e' = RSP (next $ unsafeCoerce a)
 bcast e (RSP (Free (AndU p q next)))
   = RSP (Free (AndU (bcast e p) (bcast e q) next))
+-- TODO
+bcast e (RSP (Free (And p q next)))
+  = RSP (Free (And (bcast e p) (bcast e q) next))
 bcast e (RSP (Free (OrU p q next)))
   = RSP (Free (OrU (bcast e p) (bcast e q) next))
+-- TODO
+bcast e (RSP (Free (Or p q next)))
+  = RSP (Free (Or (bcast e p) (bcast e q) next))
 bcast e (RSP (Free (Canrun n next)))
   = RSP (Free (Canrun n (getRSP $ bcast e (RSP next))))
 bcast _ p = p
