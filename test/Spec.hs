@@ -76,6 +76,14 @@ p7 = global $ \e -> global $ \f -> run $ do
         Right y'       -> go x (y + y') e f
         _              -> pure (x + y)
 
+p8 = run $ pool $ \p -> local $ \e -> do
+  spawn p (emit e 5)
+  a <- await e
+  spawn p (emit e 6)
+  b <- await e
+
+  pure (a + b)
+
 --------------------------------------------------------------------------------
 
 test :: (Show a, Eq a) => IO a -> a -> Assertion
@@ -90,4 +98,5 @@ main = defaultMain $ testGroup "Unit tests"
   , testCase "p5" $ test p5 [Left 10,Right ()]
   , testCase "p6" $ test p6 [Left [Left "E",Right ()],Right ["F","G","E"],Right ["E","G","F"],Left [Left "_",Right ()]]
   , testCase "p7" $ test p7 [Left 20,Right ()]
+  , testCase "p8" $ test p8 11
   ]
