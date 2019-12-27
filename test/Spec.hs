@@ -77,12 +77,57 @@ p7 = global $ \e -> global $ \f -> run $ do
         _              -> pure (x + y)
 
 p8 = run $ pool $ \p -> local $ \e -> do
-  spawn p (emit e 5)
-  a <- await e
-  spawn p (emit e 6)
-  b <- await e
+  [Left a, _] <- andd [ Left <$> await e, Right <$> spawn p (emit e 5) ]
+  [Left b, _] <- andd [ Left <$> await e, Right <$> spawn p (emit e 5) ]
 
   pure (a + b)
+
+p9_5 = run $ local $ \e -> pool $ \p -> do
+  spawn p (emit e 5)
+  a <- await e
+  async (print a)
+
+  spawn p (emit e 6)
+  b <- await e
+  async (print b)
+
+  spawn p (emit e 7)
+  c <- await e
+  async (print c)
+
+  pure (a + b + c)
+
+p9 = run $ local $ \e -> pool $ \p -> do
+  spawn p (emit e 5)
+  a <- await e
+  async (print a)
+
+  spawn p (emit e 6 >> spawn p (emit e 7))
+  b <- await e
+  async (print b)
+
+  c <- await e
+  async (print c)
+
+  pure (a + b + c)
+
+p10 = run $ local $ \i -> local $ \o -> pool $ \p -> do
+  spawn p (go i o 2)
+
+  andd [ Left <$> await o, Right <$> (emit i () >> spawn p (emit i () >> spawn p (emit i ()))) ]
+
+  where
+    go i o 0 = emit o 12
+    go i o n = do
+      async (print (show n))
+      _ <- await i
+      go i o (n - 1)
+
+orr1 = run $ local $ \e -> do
+  [_, Right (_, ks)] <- andd [ Left <$> await e, Right <$> orr' [ emit e (), emit e (), emit e () ] ]
+  andd $ concat [ [ await e ], ks ]
+
+orr2 = run $ local $ \e -> orr' [pure"a", await e, await e, await e, pure "orr"]
 
 --------------------------------------------------------------------------------
 
@@ -98,5 +143,5 @@ main = defaultMain $ testGroup "Unit tests"
   , testCase "p5" $ test p5 [Left 10,Right ()]
   , testCase "p6" $ test p6 [Left [Left "E",Right ()],Right ["F","G","E"],Right ["E","G","F"],Left [Left "_",Right ()]]
   , testCase "p7" $ test p7 [Left 20,Right ()]
-  , testCase "p8" $ test p8 11
+  , testCase "p8" $ test p8 10
   ]
