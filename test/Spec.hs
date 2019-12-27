@@ -82,6 +82,11 @@ p8 = run $ pool $ \p -> local $ \e -> do
 
   pure (a + b)
 
+p9_4 = run $ local $ \e -> pool $ \p -> do
+  emit e 5
+  async (print "4")
+  await e
+
 p9_5 = run $ local $ \e -> pool $ \p -> do
   spawn p (emit e 5)
   a <- await e

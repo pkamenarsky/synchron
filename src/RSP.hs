@@ -18,7 +18,7 @@ import qualified Control.Lens as L
 import Data.Bifunctor (first, second)
 import Data.IORef
 import Data.List (intercalate)
-import Data.Maybe (isJust, listToMaybe, mapMaybe)
+import Data.Maybe (isJust, isNothing, listToMaybe, mapMaybe)
 
 import Unsafe.Coerce (unsafeCoerce)
 
@@ -54,10 +54,7 @@ data RSPF next
   | forall a. Or (RSP a) (RSP a) ((a, RSP a) -> next)
   | forall a. And (RSP a) (RSP a) ([a] -> next)
 
-  | forall a. OrU (RSP a) (RSP a) ((a, RSP a) -> next)
-  | forall a. AndU (RSP a) (RSP a) ([a] -> next)
-
-  | forall a. Canrun StackLevel next
+  | Hole next
   | forall a. Tag String (RSP a)
 
 deriving instance Functor RSPF
@@ -79,10 +76,8 @@ instance Show (RSP a) where
   show (RSP (Free (Await _ _)))  = "Await"
   show (RSP (Free (Or a b _)))   = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
   show (RSP (Free (And a b _)))  = "And [" <> intercalate ", " (map show [a, b]) <> "]"
-  show (RSP (Free (OrU a b _)))  = "OrU [" <> intercalate ", " (map show [a, b]) <> "]"
-  show (RSP (Free (AndU a b _))) = "AndU [" <> intercalate ", " (map show [a, b]) <> "]"
-  show (RSP (Free (Canrun (StackLevel n) p))) = "Canrun " <> show n <> " (" <> show (RSP p) <> ")"
   show (RSP (Free (Tag s p))) = "<" <> s <> "> " <> show p
+  show (RSP (Free (Hole _))) = "Hole"
 
 async :: IO () -> RSP ()
 async io = RSP $ liftF (Async io ())
@@ -231,124 +226,90 @@ bcast e (RSP (Free (Tag s p)))
   = RSP (Free (Tag s (bcast e p)))
 bcast (ExEvent (Event e) a) (RSP (Free (Await (Event e') next)))
   | e == e' = RSP (next $ unsafeCoerce a)
-bcast e (RSP (Free (AndU p q next)))
-  = RSP (Free (AndU (bcast e p) (bcast e q) next))
--- TODO
--- bcast e (RSP (Free (And p q next)))
---   = RSP (Free (And (bcast e p) (bcast e q) next))
-bcast e (RSP (Free (OrU p q next)))
-  = RSP (Free (OrU (bcast e p) (bcast e q) next))
--- TODO
--- bcast e (RSP (Free (Or p q next)))
---   = RSP (Free (Or (bcast e p) (bcast e q) next))
--- TODO
--- bcast e (RSP (Free (Canrun n next)))
---   = RSP (Free (Canrun n (getRSP $ bcast e (RSP next))))
+bcast e (RSP (Free (And p q next)))
+  = RSP (Free (And (bcast e p) (bcast e q) next))
+bcast e (RSP (Free (Or p q next)))
+  = RSP (Free (Or (bcast e p) (bcast e q) next))
 bcast _ p = p
 
-isBlocked :: RSP a -> StackLevel -> Bool
-isBlocked (RSP (Free (Tag _ p))) n = isBlocked p n
-isBlocked (RSP (Free (Await _ _))) _ = True
-isBlocked (RSP (Free (Canrun m _))) n = n > m
-isBlocked (RSP (Free (AndU p q _))) n = isBlocked p n && isBlocked q n
-isBlocked (RSP (Free (OrU p q _))) n = isBlocked p n && isBlocked q n
-isBlocked _ _ = False
-
-isBlocked' :: RSP a -> StackLevel -> Bool
-isBlocked' (RSP (Free (Tag _ p))) n = isBlocked' p n
-isBlocked' (RSP (Free (Await _ _))) _ = True
-isBlocked' (RSP (Free (Canrun m _))) n = n > m
-isBlocked' (RSP (Free (And p q _))) n = isBlocked' p n && isBlocked' q n
-isBlocked' (RSP (Free (Or p q _))) n = isBlocked' p n && isBlocked' q n
-isBlocked' _ _ = False
+isBlocked :: RSP a -> Bool
+isBlocked (RSP (Free (Await _ _))) = True
+isBlocked (RSP (Free (And p q _))) = isBlocked p && isBlocked q
+isBlocked (RSP (Free (Or p q _))) = isBlocked p && isBlocked q
+isBlocked _ = False
 
 step
   :: Maybe ExEvent
-  -> StackLevel
   -> EventIdInt
   -> RSP a
-  -> (Maybe ExEvent, StackLevel, EventIdInt, RSP a, IO ())
-
-step e eid n (RSP (Free (Tag s p))) = (e', n', eid', (RSP $ Free $ Tag s p'), io)
-  where
-     (e', n', eid', p', io) = step e eid n p
+  -> (Maybe ExEvent, EventIdInt, RSP a, IO ())
 
 -- push
-step (Just event) n eid p
-  = (Nothing, n + 1, eid + 1, bcast event p, pure ())
+step (Just event) eid p
+  = (Nothing, eid + 1, bcast event p, pure ())
 -- pop
-step Nothing n eid p
-  | n > 0 && isBlocked p n = (Nothing, n - 1, eid + 1, p, pure ())
+step Nothing eid p
+  | isBlocked p = (Nothing, eid + 1, p, pure ())
 
 -- local
-step Nothing n eid (RSP (Free (Local f next)))
-  = (Nothing, n, eid + 1, f (Event (I eid)) >>= RSP . next, pure ())
+step Nothing eid (RSP (Free (Local f next)))
+  = (Nothing, eid + 1, f (Event (I eid)) >>= RSP . next, pure ())
 
 -- emit
-step Nothing n eid (RSP (Free (Emit e next)))
-  = (Just e, n, eid + 1, RSP (Free (Canrun n next)), pure ())
+step Nothing eid (RSP (Free (Emit e next)))
+  = (Just e, eid, RSP (next), pure ())
 
--- canrun
-step Nothing n eid (RSP (Free (Canrun m next)))
-  | n == m = (Nothing, n, eid + 1, RSP next, pure ())
+-- hole
+step Nothing eid (RSP (Free (Hole next)))
+  = (Nothing, eid, RSP next, pure ())
 
 -- async
-step Nothing n eid (RSP (Free (Async io next)))
-  = (Nothing, n, eid + 1, RSP next, io)
+step Nothing eid (RSP (Free (Async io next)))
+  = (Nothing, eid + 1, RSP next, io)
 
--- and-expd
-step Nothing n eid (RSP (Free (And (RSP p) (RSP q) next)))
-  | isBlocked' (RSP p) n = (Nothing, n, eid + 1, RSP (Free (AndU (RSP p) (RSP (Free (Canrun n q))) next)), pure ())
-  | otherwise = (Nothing, n, eid + 1, RSP (Free (AndU (RSP q) (RSP (Free (Canrun n p))) next)), pure ())
 -- and-nop1
-step Nothing n eid (RSP (Free (AndU (RSP (Pure a)) q next)))
-  = (Nothing, n, eid + 1, q' a, pure ())
+step Nothing eid (RSP (Free (And (RSP (Pure a)) q next)))
+  = (Nothing, eid + 1, q' a, pure ())
   where
    q' a = do
      b <- q
      RSP (next [a, b])
 -- and-nop2
-step Nothing n eid (RSP (Free (AndU p (RSP (Pure b)) next)))
-  | isBlocked p n = (Nothing, n, eid + 1, p' b, pure ())
+step Nothing eid (RSP (Free (And p (RSP (Pure b)) next)))
+  | isBlocked p = (Nothing, eid + 1, p' b, pure ())
   where
     p' b = do
       a <- p
       RSP (next [a, b])
 -- and-adv2
-step Nothing n eid (RSP (Free (AndU p q next)))
-  | isBlocked p n
-  && n == n' = (e, n, eid', RSP (Free (AndU p q' next)), io)
+step Nothing eid (RSP (Free (And p q next)))
+  | isBlocked p = (e, eid', RSP (Free (And p q' next)), io)
   where
-    (e, n', eid', q', io) = step Nothing n eid q
+    (e, eid', q', io) = step Nothing eid q
 -- and-adv1
-step Nothing n eid (RSP (Free (AndU p q next)))
-  | n == n' = (e, n, eid', RSP (Free (AndU p' q next)), io)
+step Nothing eid (RSP (Free (And p q next)))
+  = (e, eid', RSP (Free (And p' q next)), io)
   where
-    (e, n', eid', p', io) = step Nothing n eid p
+    (e, eid', p', io) = step Nothing eid p
 
--- or-expd
-step Nothing n eid (RSP (Free (Or (RSP p) (RSP q) next)))
-  | isBlocked' (RSP p) n = (Nothing, n, eid + 1, RSP (Free (OrU (RSP p) (RSP (Free (Canrun n q))) next)), pure ())
-  | otherwise = (Nothing, n, eid + 1, RSP (Free (OrU (RSP q) (RSP (Free (Canrun n p))) next)), pure ())
 -- or-nop1
-step Nothing n eid (RSP (Free (OrU (RSP (Pure a)) q next)))
-  = (Nothing, n, eid + 1, RSP (next (a, q)), pure ())
+step Nothing eid (RSP (Free (Or (RSP (Pure a)) q next)))
+  = (Nothing, eid + 1, RSP (next (a, q)), pure ())
 -- or-nop2
-step Nothing n eid (RSP (Free (OrU p (RSP (Pure b)) next)))
-  | isBlocked p n = (Nothing, n, eid + 1, RSP (next (b, p)), pure ())
+step Nothing eid (RSP (Free (Or p (RSP (Pure b)) next)))
+  = (Nothing, eid + 1, RSP (next (b, p)), pure ())
 -- or-adv2
-step Nothing n eid (RSP (Free (OrU p q next)))
-  | isBlocked p n
-  && n == n' = (e, n, eid', RSP (Free (OrU p q' next)), io)
+step Nothing eid (RSP (Free (Or p q next)))
+  | isBlocked p = (e, eid', RSP (Free (Or p q' next)), io)
   where
-    (e, n', eid', q', io) = step Nothing n eid q
+    (e, eid', q', io) = step Nothing eid q
 -- or-adv1
-step Nothing n eid (RSP (Free (OrU p q next)))
-  | n == n' = (e, n, eid', RSP (Free (OrU p' q next)), io)
+step Nothing eid (RSP (Free (Or p q next)))
+  = (e, eid', RSP (Free (Or p' q next)), io)
   where
-    (e, n', eid', p', io) = step Nothing n eid p
+    (e, eid', p', io) = step Nothing eid p
 
-step e eid n p = error (isEvent e <> ", " <> show n <> ", " <> show eid <> ", " <> show p)
+step e eid p = error (isEvent e <> ", " <> show eid <> ", " <> show p)
   where
     isEvent (Just _) = "Event"
     isEvent Nothing  = "No event"
@@ -356,16 +317,18 @@ step e eid n p = error (isEvent e <> ", " <> show n <> ", " <> show eid <> ", " 
 --------------------------------------------------------------------------------
 
 run :: RSP a -> IO a
-run = go Nothing 0 0
+run = go Nothing 0
   where
-    -- go e n 100 p = error "END"
-    go e n eid p = do
-      traceIO (show (getStackLevel n) <> ": " <> show p <> ", " <> show (isJust e))
-      let (e', n', eid', p', io) = step e n eid p
+    go e eid p = do
+      traceIO (show p <> ", ")
+      let (e', eid', p', io) = step e eid p
+      traceIO (show $ isJust e')
       io
       case p' of
         RSP (Pure a) -> pure a
-        _ -> go e' n' eid' p'
+        _ -> if isNothing e' && isBlocked p'
+          then error "Blocked"
+          else go e' eid' p'
 
 -- Pools -----------------------------------------------------------------------
 
@@ -393,7 +356,10 @@ pool f = local $ \e -> go e
   (singletonO (Left <$> f (Pool e)) `appendO` singletonO (Right . Left <$> await e))
   where
     go e k = do
+      async (traceIO "BEFORE")
       (r, k') <- advO k
+
+      async (traceIO $ show (r, k'))
 
       case r of
         Left a -> pure a
@@ -401,7 +367,8 @@ pool f = local $ \e -> go e
           ( (singletonO (Right . Left <$> await e))
             `appendO`
             (singletonO (fmap (Right . Right) p))
-            `appendO` k'
+            `appendO`
+            k'
           )
         Right (Right _) -> go e k'
 
