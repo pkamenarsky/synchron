@@ -24,6 +24,7 @@ dependencies:
 - amqp
 - async
 - broadcast-chan
+- containers
 - free
 - lens
 - transformers

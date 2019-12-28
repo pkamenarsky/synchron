@@ -3,16 +3,16 @@ import Test.Tasty.HUnit
 
 import RSP
 
-p1 = global $ \e -> run $ do
-  a <- andd [ Left <$> ((,) <$> await e <*> await e), Right <$> emit e "A", Right <$> emit e "C" ]
+p1 = run $ local $ \e -> do
+  a <- andd [ Left <$> await e, Right <$> emit e "A", Right <$> emit e "C" ]
   b <- orr [ Left <$> await e, Right <$> emit e "B" ]
   pure (a, b)
 
-p2 = global $ \e -> run $ do
+p2 = run $ local $ \e -> do
   a <- andd [ Left <$> emit e "E", Right <$> await e ]
   pure a
 
-p3 = global $ \e -> global $ \f -> run $ do
+p3 = run $ local $ \e -> local $ \f -> do
   a <- andd
     [ Left  <$> (await e >> emit f "F")
     , Right <$> await f
@@ -20,7 +20,7 @@ p3 = global $ \e -> global $ \f -> run $ do
     ]
   pure a
 
-p4 = global $ \e -> global $ \f -> run $do
+p4 = run $ local $ \e -> local $ \f -> do
   a <- andd
     [ Left  <$> andd [ Left <$> await e, Right <$> emit f "F" ]
     , Right <$> await f
@@ -28,7 +28,7 @@ p4 = global $ \e -> global $ \f -> run $do
     ]
   pure a
 
-p5 = global $ \e -> run $ do
+p5 = run $ local $ \e -> do
   andd
     [ Left  <$> go 0 e
     , Right <$> do
@@ -55,7 +55,7 @@ p6 = run $ local $ \e -> local $ \f -> local $ \g -> do
     ]
   pure a
 
-p7 = global $ \e -> global $ \f -> run $ do
+p7 = run $ local $ \e -> local $ \f -> do
   andd
     [ Left  <$> go 0 0 e f
     , Right <$> do
@@ -141,7 +141,7 @@ test f a = f >>= (@?= a)
 
 main :: IO ()
 main = defaultMain $ testGroup "Unit tests"
-  [ testCase "p1" $ test p1 ([Left ("A","C"),Right (),Right ()],Left "B")
+  [ testCase "p1" $ test p1 ([Left "C",Right (),Right ()],Left "C")
   , testCase "p2" $ test p2 [Left (),Right "E"]
   , testCase "p3" $ test p3 [Left (),Right "F",Left ()]
   , testCase "p4" $ test p4 [Left [Left "E",Right ()],Right "F",Left [Left "_",Right ()]]
