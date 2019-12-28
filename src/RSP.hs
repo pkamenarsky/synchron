@@ -34,11 +34,15 @@ newtype EventIdRef = EventIdRef (IORef ())
   deriving Eq
 
 data EventId = I EventIdInt -- | R EventIdRef
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show)
 
 data Event a = Event EventId
+  deriving Show
 
 data ExEvent = forall a. ExEvent (Event a) a
+
+instance Show ExEvent where
+  show (ExEvent e _) = show e
 
 newtype StackLevel = StackLevel { getStackLevel :: Int }
   deriving (Eq, Ord, Num, Show)
@@ -56,6 +60,7 @@ data RSPF next
   | forall a. And (RSP a) (RSP a) ([a] -> next)
 
   | Hole next
+  | HoleNext next
   | forall a. Tag String (RSP a)
 
 deriving instance Functor RSPF
@@ -79,6 +84,7 @@ instance Show (RSP a) where
   show (RSP (Free (And a b _)))  = "And [" <> intercalate ", " (map show [a, b]) <> "]"
   show (RSP (Free (Tag s p))) = "<" <> s <> "> " <> show p
   show (RSP (Free (Hole _))) = "Hole"
+  show (RSP (Free (HoleNext _))) = "HoleNext"
 
 async :: IO () -> RSP ()
 async io = RSP $ liftF (Async io ())
@@ -99,6 +105,9 @@ emit e a = RSP $ liftF (Emit (ExEvent e a) ())
 
 await :: Event a -> RSP a
 await e = RSP $ liftF (Await e id)
+
+hole :: RSP ()
+hole = RSP $ liftF (Hole ())
 
 tag :: String -> RSP a -> RSP a
 tag s p = RSP $ liftF (Tag s p)
@@ -271,6 +280,19 @@ step em m eid ios rsp@(RSP (Free (Await (Event eid') next)))
     , True
     )
 
+-- hole
+step em m eid ios (RSP (Free (Hole next)))
+  = ( m
+    , eid
+    , ios
+    , RSP (Free (HoleNext next))
+    , True
+    )
+
+-- hole
+step em m eid ios (RSP (Free (HoleNext next)))
+  = step em m eid ios (RSP next)
+
 -- async
 step em m eid ios (RSP (Free (Async io next)))
   = step em m (eid + 1) (io:ios) (RSP next)
@@ -278,7 +300,7 @@ step em m eid ios (RSP (Free (Async io next)))
 -- and
 step em m eid ios rsp@(RSP (Free (And p q next)))
   = case (p', q') of
-      (RSP (Pure a), RSP (Pure b)) -> if pc || qc
+      (RSP (Pure a), RSP (Pure b)) -> if False -- if pc || qc
         then (m'', eid'', ios'', RSP (next [a, b]), pc || qc)
         else step em m'' eid'' ios'' (RSP (next [a, b]))
       _ -> (m'', eid'', ios'', RSP (Free (And p' q' next)), pc || qc)
@@ -287,15 +309,16 @@ step em m eid ios rsp@(RSP (Free (And p q next)))
     (m'', eid'', ios'', q', qc) = step em m' (eid' + 1) ios' q
 
 -- or
+-- TODO: remove pc, qc etc, just remove event from `em` on `await`
 step em m eid ios rsp@(RSP (Free (Or p q next)))
   = case (p', q') of
-      (RSP (Pure a), _) -> if pc
+      (RSP (Pure a), _) -> if False -- if pc
         then (m', eid', ios', RSP (next (a, q')), pc)
         else step em m' eid' ios' (RSP (next (a, q')))
-      (_, RSP (Pure b)) -> if pc || qc
+      (_, RSP (Pure b)) -> if False -- if pc || qc
         then (m'', eid'', ios'', RSP (next (b, p')), pc || qc)
         else step em m'' eid'' ios'' (RSP (next (b, p')))
-      _ -> (m'', eid'', ios'', RSP (Free (Or p' q' next)), undefined)
+      _ -> (m'', eid'', ios'', RSP (Free (Or p' q' next)), pc || qc)
   where
     (m', eid', ios', p', pc) = step em m (eid + 1) ios p
     (m'', eid'', ios'', q', qc) = step em m' (eid' + 1) ios' q
@@ -383,8 +406,9 @@ run = go M.empty 0
   where
     go em 100 p = error "END"
     go em eid p = do
-      traceIO (show p <> ", ")
+      traceIO ("*** " <> show p)
       let (em', eid', ios, p', _) = step em M.empty eid [] p
+      traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys em'))
       sequence_ ios
       case p' of
         RSP (Pure a) -> pure a
@@ -435,4 +459,5 @@ pool f = local $ \e -> go e
         Right (Right _) -> go e k'
 
 spawn :: Pool -> RSP () -> RSP ()
-spawn (Pool e) p = emit e p
+spawn (Pool e) p = do
+  emit e p

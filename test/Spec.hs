@@ -31,12 +31,7 @@ p4 = run $ local $ \e -> local $ \f -> do
 p5 = run $ local $ \e -> do
   andd
     [ Left  <$> go 0 e
-    , Right <$> do
-        emit e (Left 1)
-        emit e (Left 2)
-        emit e (Left 3)
-        emit e (Left 4)
-        emit e (Right ())
+    , Right <$> emit e (Right ())
     ]
   where
     go :: Int -> Event (Either Int ()) -> RSP Int
@@ -119,12 +114,12 @@ p9 = run $ local $ \e -> pool $ \p -> do
 p10 = run $ local $ \i -> local $ \o -> pool $ \p -> do
   spawn p (go i o 2)
 
-  andd [ Left <$> await o, Right <$> (emit i () >> spawn p (emit i () >> spawn p (emit i ()))) ]
+  andd [ Left <$> await o, Right <$> (spawn p (emit i () >> spawn p (emit i () >> spawn p (emit i ())))) ]
 
   where
     go i o 0 = emit o 12
     go i o n = do
-      async (print (show n))
+      async (print "BLA")
       _ <- await i
       go i o (n - 1)
 
@@ -141,11 +136,11 @@ test f a = f >>= (@?= a)
 
 main :: IO ()
 main = defaultMain $ testGroup "Unit tests"
-  [ testCase "p1" $ test p1 ([Left "C",Right (),Right ()],Left "C")
+  [ testCase "p1" $ test p1 ([Left "C",Right (),Right ()],Right ())
   , testCase "p2" $ test p2 [Left (),Right "E"]
   , testCase "p3" $ test p3 [Left (),Right "F",Left ()]
   , testCase "p4" $ test p4 [Left [Left "E",Right ()],Right "F",Left [Left "_",Right ()]]
-  , testCase "p5" $ test p5 [Left 10,Right ()]
+  , testCase "p5" $ test p5 [Left 0,Right ()]
   , testCase "p6" $ test p6 [Left [Left "E",Right ()],Right ["F","G","E"],Right ["E","G","F"],Left [Left "_",Right ()]]
   , testCase "p7" $ test p7 [Left 20,Right ()]
   , testCase "p8" $ test p8 10
