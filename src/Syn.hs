@@ -1,6 +1,9 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TupleSections #-}
 
@@ -47,7 +50,7 @@ data SynF next
   | forall t a. Await (Event t a) (a -> next)
 
   | forall a. Or (Syn a) (Syn a) ((a, Syn a) -> next)
-  | forall a. And (Syn a) (Syn a) ([a] -> next)
+  | forall a b. And (Syn a) (Syn b) ((a, b) -> next)
 
 deriving instance Functor SynF
 
@@ -69,7 +72,7 @@ instance Show (Syn a) where
   show (Syn (Free (Emit (EventValue (Event e) _) _))) = "Emit (" <> show e <> ")"
   show (Syn (Free (Await (Event e) _))) = "Await (" <> show e <> ")"
   show (Syn (Free (Or a b _))) = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
-  show (Syn (Free (And a b _))) = "And [" <> intercalate ", " (map show [a, b]) <> "]"
+  show (Syn (Free (And a b _))) = "And [" <> show a <> ", " <> show b <> "]"
 
 async :: IO () -> Syn ()
 async io = Syn $ liftF (Async io ())
@@ -92,10 +95,38 @@ orr [a] = a
 orr [a, b] = fmap fst $ Syn $ liftF (Or a b id)
 orr (a:as) = orr [a, orr as]
 
-andd :: [Syn a] -> Syn [a]
-andd [a] = (:[]) <$> a
-andd [a, b] = Syn $ liftF (And a b id)
-andd (a:as) = concat <$> andd [(:[]) <$> a, andd as]
+andd' :: [Syn a] -> Syn [a]
+andd' [a] = (:[]) <$> a
+andd' [a, b] = do
+  (a, b) <- Syn $ liftF (And a b id)
+  pure [a, b]
+andd' (a:as) = concat <$> andd' [(:[]) <$> a, andd' as]
+
+class Andd a b | a -> b where
+  andd :: a -> b
+
+instance Andd (Syn a, Syn b) (Syn (a, b)) where
+  andd (a, b) = Syn $ liftF (And a b id)
+
+instance Andd (Syn a, Syn b, Syn c) (Syn (a, b, c)) where
+  andd (a, b, c) = do
+    (k, (l, m)) <- andd (a, andd (b, c))
+    pure (k, l, m)
+
+instance Andd (Syn a, Syn b, Syn c, Syn d) (Syn (a, b, c, d)) where
+  andd (a, b, c, d) = do
+    (k, (l, m, n)) <- andd (a, andd (b, c, d))
+    pure (k, l, m, n)
+
+instance Andd (Syn a, Syn b, Syn c, Syn d, Syn e) (Syn (a, b, c, d, e)) where
+  andd (a, b, c, d, e) = do
+    (k, (l, m, n, o)) <- andd (a, andd (b, c, d, e))
+    pure (k, l, m, n, o)
+
+instance Andd (Syn a, Syn b, Syn c, Syn d, Syn e, Syn f) (Syn (a, b, c, d, e, f)) where
+  andd (a, b, c, d, e, f) = do
+    (k, (l, m, n, o, p)) <- andd (a, andd (b, c, d, e, f))
+    pure (k, l, m, n, o, p)
 
 --------------------------------------------------------------------------------
 
@@ -142,7 +173,7 @@ unblock m rsp@(Syn (Free (Emit _ next))) = (Syn next, True)
 unblock m rsp@(Syn (Free (And p q next)))
   = case (p', q') of
       (Syn (Pure a), Syn (Pure b))
-        -> (Syn (next [a, b]), True)
+        -> (Syn (next (a, b)), True)
       _ -> (Syn (Free (And p' q' next)), up || uq)
   where
     (p', up) = unblock m p
@@ -193,7 +224,7 @@ advance eid ios (Syn (Free (Async io next)))
 advance eid ios rsp@(Syn (Free (And p q next)))
   = case (p', q') of
       (Syn (Pure a), Syn (Pure b))
-        -> advance eid'' ios'' (Syn (next [a, b]))
+        -> advance eid'' ios'' (Syn (next (a, b)))
       _ -> (eid'', ios'', Syn (Free (And p' q' next)))
   where
     (eid', ios', p') = advance (eid + 1) ios p

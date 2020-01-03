@@ -7,24 +7,24 @@ import Test.Tasty.HUnit
 import Syn
 
 p1 = exhaust $ local $ \e -> do
-  a <- andd [ Left <$> await e, Right <$> emit e "A", Right <$> emit e "C" ]
+  a <- andd (await e, emit e "A", emit e "C")
   b <- orr [ Left <$> await e, Right <$> emit e "B" ]
   pure (a, b)
 
 p2 = exhaust $ local $ \e -> do
-  andd [ Left <$> emit e "E", Right <$> await e ]
+  andd (emit e "E", await e)
 
 p2_2 = exhaust $ local $ \e -> do
-  andd [ Right <$> await e, Left <$> emit e "E" ]
+  andd (await e, emit e "E")
 
 p2_3 = exhaust $ local $ \e -> do
-  andd [ Left <$> (emit e "E" >> emit e "F"), Right <$> ((,) <$> await e <*> await e) ]
+  andd ((emit e "E" >> emit e "F"), ((,) <$> await e <*> await e))
 
 p2_4 = exhaust $ local $ \e -> local $ \f -> do
-  andd [ Left <$> (andd [ await e, await f ]), Right <$> orr [ emit e 5, emit f 6 ] ]
+  andd (andd (await e, await f), orr [ emit e 5, emit f 6 ])
 
 p2_5 = exhaust $ local $ \e -> local $ \f -> do
-  andd [ Left <$> (orr [ await e, await f ]), Right <$> orr [ emit e 5, emit f 6 ] ]
+  andd (orr [ await e, await f ], orr [ emit e 5, emit f 6 ])
 
 p2_6 = exhaust $ local $ \e -> do
   orr [ Left <$> emit e "E", Right <$> await e ]
@@ -34,25 +34,25 @@ p2_7 = exhaust $ local $ \e -> do
 
 p3 = exhaust $ local $ \e -> local $ \f -> do
   a <- andd
-    [ Left  <$> (await e >> emit f "F")
-    , Right <$> await f
-    , Left  <$> emit e "E"
-    ]
+         ( await e >> emit f "F"
+         , await f
+         , emit e "E"
+         )
   pure a
 
 p4 = exhaust $ local $ \e -> local $ \f -> do
   a <- andd
-    [ Left  <$> andd [ Left <$> await e, Right <$> emit f "F" ]
-    , Right <$> await f
-    , Left  <$> andd [ Left <$> pure "_", Right <$> (await f >> emit e "E") ]
-    ]
+         ( andd (await e, emit f "F")
+         , await f
+         , andd (pure "_" :: Syn String, await f >> emit e "E")
+         )
   pure a
 
 p5 = exhaust $ local $ \e -> do
   andd
-    [ Left  <$> go 0 e
-    , Right <$> emit e (Right ())
-    ]
+    ( go 0 e
+    , emit e (Right ())
+    )
   where
     go :: Int -> Event Internal (Either Int ()) -> Syn Int
     go s e = do
@@ -63,24 +63,24 @@ p5 = exhaust $ local $ \e -> do
 
 p6 = exhaust $ local $ \e -> local $ \f -> local $ \g -> do
   a <- andd
-    [ Left  <$> andd [ Left <$> await e, Right <$> (emit f "F" >> await g >> emit e "E") ]
-    , Right <$> andd [ await f, await g, await e ]
-    , Right <$> andd [ await e, await g, await f ]
-    , Left  <$> andd [ Left <$> pure "_", Right <$> (await f >> emit g "G") ]
-    ]
+    ( andd (await e, emit f "F" >> await g >> emit e "E")
+    , andd (await f, await g, await e)
+    , andd (await e, await g, await f)
+    , andd (pure "_" :: Syn String, await f >> emit g "G")
+    )
   pure a
 
 p7 = exhaust $ local $ \e -> local $ \f -> do
   andd
-    [ Left  <$> go 0 0 e f
-    , Right <$> do
+    ( go 0 0 e f
+    , do
         emit f 1
         emit f 2
         emit f 3
         emit f 6
         emit f 8
         emit e (Right ())
-    ]
+    )
   where
     go :: Int -> Int -> Event Internal (Either Int ()) -> Event Internal Int -> Syn Int
     go x y e f = do
@@ -91,8 +91,8 @@ p7 = exhaust $ local $ \e -> local $ \f -> do
         _              -> pure (x + y)
 
 p8 = exhaust $ pool $ \p -> local $ \e -> do
-  [Left a, _] <- andd [ Left <$> await e, Right <$> emit e 5 ]
-  [Left b, _] <- andd [ Left <$> await e, Right <$> spawn p (emit e 5) ]
+  (a, _) <- andd (await e, emit e 5)
+  (b, _) <- andd (await e, spawn p (emit e 5))
 
   pure (a + b)
 
@@ -121,7 +121,7 @@ p9_2 = exhaust $ local $ \e -> pool $ \p -> do
 p10 = exhaust $ local $ \i -> local $ \o -> pool $ \p -> do
   spawn p (go i o 0 3)
 
-  andd [ Left <$> await o, Right <$> (emit i 1 >> spawn p (emit i 2 >> spawn p (emit i 3))) ]
+  andd (await o, emit i 1 >> spawn p (emit i 2 >> spawn p (emit i 3)))
 
   where
     go i o x 0 = emit o x
@@ -141,7 +141,7 @@ p11 = exhaust $ do
 
 e12 result = event $ \e -> do
   ctx <- run $ do
-    a <- andd [ await e, await e ]
+    a <- andd' [ await e, await e ]
     async (result a)
 
   push ctx e "E"
@@ -150,7 +150,7 @@ e12 result = event $ \e -> do
 
 e13 result = event $ \e -> do
   ctx <- run $ local $ \f -> do
-    a <- andd [ Left <$> await e, Left <$> await e, Left <$> await e, Right <$> emit f "F" ]
+    a <- andd (await e, await e, await e, emit f "F")
     async (result a)
 
   push ctx e "E"
@@ -159,7 +159,7 @@ e13 result = event $ \e -> do
 
 e14 result = event $ \e -> do
   ctx <- run $ local $ \f -> do
-    a <- andd [ Left <$> await e, Left <$> await e, Left <$> ((,) <$> await f <*> await f), Right <$> (emit f "F" >> emit f "F") ]
+    a <- andd (await e, await e, (,) <$> await f <*> await f, emit f "F" >> emit f "F")
     async (result a)
 
   push ctx e ("E","E")
@@ -180,26 +180,26 @@ testE f a = do
 
 main :: IO ()
 main = defaultMain $ testGroup "Unit tests"
-  [ testCase "p1" $ test p1 ([Left "A",Right (),Right ()],Left "B")
-  , testCase "p2" $ test p2 [Left (),Right "E"]
-  , testCase "p2_2" $ test p2_2 [Right "E",Left ()]
-  , testCase "p2_3" $ test p2_3 [Left (),Right ("E","F")]
-  , testCase "p2_4" $ test p2_4 [Left [5,6],Right ()]
-  , testCase "p2_5" $ test p2_5 [Left 5,Right ()]
+  [ testCase "p1" $ test p1 (("A",(),()),Left "B")
+  , testCase "p2" $ test p2 ((),"E")
+  , testCase "p2_2" $ test p2_2 ("E",())
+  , testCase "p2_3" $ test p2_3 ((),("E","F"))
+  , testCase "p2_4" $ test p2_4 ((5,6),())
+  , testCase "p2_5" $ test p2_5 (5,())
   , testCase "p2_6" $ test p2_6 (Left ())
   , testCase "p2_7" $ test p2_7 (Right "E")
-  , testCase "p3" $ test p3 [Left (),Right "F",Left ()]
-  , testCase "p4" $ test p4 [Left [Left "E",Right ()],Right "F",Left [Left "_",Right ()]]
-  , testCase "p5" $ test p5 [Left 0,Right ()]
-  , testCase "p6" $ test p6 [Left [Left "E",Right ()],Right ["F","G","E"],Right ["E","G","F"],Left [Left "_",Right ()]]
-  , testCase "p7" $ test p7 [Left 20,Right ()]
+  , testCase "p3" $ test p3 ((),"F",())
+  , testCase "p4" $ test p4 (("E",()),"F",("_",()))
+  , testCase "p5" $ test p5 (0,())
+  , testCase "p6" $ test p6 (("E",()),("F","G","E"),("E","G","F"),("_",()))
+  , testCase "p7" $ test p7 (20,())
   , testCase "p8" $ test p8 10
   , testCase "p9" $ test p9 18
   , testCase "p9_2" $ test p9_2 18
-  , testCase "p10" $ test p10 [Left 6,Right ()]
+  , testCase "p10" $ test p10 (6,())
   , testCase "p11" $ test p11 ("a","b","c")
 
   , testCase "e12" $ testE e12 ["E", "E"]
-  , testCase "e13" $ testE e13 [Left "E",Left "E",Left "E",Right ()]
-  , testCase "e14" $ testE e14 [Left ("E","E"),Left ("E","E"),Left ("F","F"),Right ()]
+  , testCase "e13" $ testE e13 ("E","E","E",())
+  , testCase "e14" $ testE e14 (("E","E"),("E","E"),("F","F"),())
   ]
