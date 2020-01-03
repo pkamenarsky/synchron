@@ -2,6 +2,7 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TupleSections #-}
 
 module RSP where
 
@@ -118,9 +119,7 @@ instance Monoid (Orr a) where
   mempty = D
 
 singletonOrr :: RSP a -> Orr a
-singletonOrr p = Orr $ do
-  a <- p
-  pure (a, D)
+singletonOrr p = Orr ((,D) <$> p)
 
 --------------------------------------------------------------------------------
 

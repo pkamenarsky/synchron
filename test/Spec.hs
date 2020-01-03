@@ -14,13 +14,22 @@ p2 = run $ local $ \e -> do
   andd [ Left <$> emit e "E", Right <$> await e ]
 
 p2_2 = run $ local $ \e -> do
+  andd [ Right <$> await e, Left <$> emit e "E" ]
+
+p2_3 = run $ local $ \e -> do
   andd [ Left <$> (emit e "E" >> emit e "F"), Right <$> ((,) <$> await e <*> await e) ]
 
-p2_3 = run $ local $ \e -> local $ \f -> do
+p2_4 = run $ local $ \e -> local $ \f -> do
   andd [ Left <$> (andd [ await e, await f ]), Right <$> orr [ emit e 5, emit f 6 ] ]
 
-p2_4 = run $ local $ \e -> local $ \f -> do
+p2_5 = run $ local $ \e -> local $ \f -> do
   andd [ Left <$> (orr [ await e, await f ]), Right <$> orr [ emit e 5, emit f 6 ] ]
+
+p2_6 = run $ local $ \e -> do
+  orr [ Left <$> emit e "E", Right <$> await e ]
+
+p2_7 = run $ local $ \e -> do
+  orr [ Right <$> await e, Left <$> emit e "E" ]
 
 p3 = run $ local $ \e -> local $ \f -> do
   a <- andd
@@ -138,9 +147,12 @@ main :: IO ()
 main = defaultMain $ testGroup "Unit tests"
   [ testCase "p1" $ test p1 ([Left "A",Right (),Right ()],Left "B")
   , testCase "p2" $ test p2 [Left (),Right "E"]
-  , testCase "p2_2" $ test p2_2 [Left (),Right ("E","F")]
-  , testCase "p2_3" $ test p2_3 [Left [5,6],Right ()]
-  , testCase "p2_4" $ test p2_4 [Left 5,Right ()]
+  , testCase "p2_2" $ test p2_2 [Right "E",Left ()]
+  , testCase "p2_3" $ test p2_3 [Left (),Right ("E","F")]
+  , testCase "p2_4" $ test p2_4 [Left [5,6],Right ()]
+  , testCase "p2_5" $ test p2_5 [Left 5,Right ()]
+  , testCase "p2_6" $ test p2_6 (Left ())
+  , testCase "p2_7" $ test p2_7 (Right "E")
   , testCase "p3" $ test p3 [Left (),Right "F",Left ()]
   , testCase "p4" $ test p4 [Left [Left "E",Right ()],Right "F",Left [Left "_",Right ()]]
   , testCase "p5" $ test p5 [Left 0,Right ()]
