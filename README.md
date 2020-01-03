@@ -20,7 +20,7 @@ example = local $ \e -> do              ➊
 
 # References
 
-<b id="f1">[1]</b> [The Ceu Manual v0.30](https://github.com/ceu-lang/ceu/blob/master/docs/manual/v0.30/ceu-v0.30.pdf)
+<b id="f1"><sup>[1]</sup></b> [The Ceu Manual v0.30](https://github.com/ceu-lang/ceu/blob/master/docs/manual/v0.30/ceu-v0.30.pdf)
 
 <b id="f2">[2]</b> [The Programming Language Ceu](http://www.ceu-lang.org)
 
