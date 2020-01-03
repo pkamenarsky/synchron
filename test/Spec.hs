@@ -130,9 +130,9 @@ p10 = run $ local $ \i -> local $ \o -> pool $ \p -> do
 
 p11 = run $ do
   (a, ks) <- fromJust $ runOrr $ mconcat
-    [ singletonOrr (pure "a")
-    , singletonOrr (pure "b")
-    , singletonOrr (pure "c")
+    [ liftOrr (pure "a")
+    , liftOrr (pure "b")
+    , liftOrr (pure "c")
     ]
   (b, ks') <- fromJust $ runOrr ks
   (c, ks'') <- fromJust $ runOrr ks'

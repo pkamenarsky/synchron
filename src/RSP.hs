@@ -118,8 +118,8 @@ instance Semigroup (Orr a) where
 instance Monoid (Orr a) where
   mempty = D
 
-singletonOrr :: RSP a -> Orr a
-singletonOrr p = Orr ((,D) <$> p)
+liftOrr :: RSP a -> Orr a
+liftOrr p = Orr ((,D) <$> p)
 
 --------------------------------------------------------------------------------
 
@@ -257,8 +257,8 @@ data Pool = Pool (Event (RSP ()))
 
 pool :: Show a => (Pool -> RSP a) -> RSP a
 pool f = local $ \e -> go e $ mconcat
-  [ singletonOrr (Right . Left <$> await e)
-  , singletonOrr (Left <$> f (Pool e))
+  [ liftOrr (Right . Left <$> await e)
+  , liftOrr (Left <$> f (Pool e))
   ]
   where
     go e k = do
@@ -267,8 +267,8 @@ pool f = local $ \e -> go e $ mconcat
       case r of
         Left a -> pure a
         Right (Left p)  -> go e $ mconcat
-          [ singletonOrr (Right . Left <$> await e)
-          , singletonOrr (fmap (Right . Right) p)
+          [ liftOrr (Right . Left <$> await e)
+          , liftOrr (fmap (Right . Right) p)
           , k'
           ]
         Right (Right _) -> go e k'
