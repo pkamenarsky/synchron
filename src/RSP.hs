@@ -76,11 +76,6 @@ async io = RSP $ liftF (Async io ())
 forever :: RSP a
 forever = RSP $ liftF Forever
 
--- global :: (Event a -> IO b) -> IO b
--- global f = do
---   e <- newIORef ()
---   f (Event (R $ EventIdRef e))
-
 local :: (Event a -> RSP b) -> RSP b
 local f = RSP $ liftF (Local f id)
 
@@ -90,6 +85,7 @@ emit e a = RSP $ liftF (Emit (ExEvent e a) ())
 await :: Event a -> RSP a
 await e = RSP $ liftF (Await e id)
 
+-- | Left biased.
 orr :: [RSP a] -> RSP a
 orr [a] = a
 orr [a, b] = fmap fst $ RSP $ liftF (Or a b id)
@@ -100,12 +96,28 @@ andd [a] = (:[]) <$> a
 andd [a, b] = RSP $ liftF (And a b id)
 andd (a:as) = concat <$> andd [(:[]) <$> a, andd as]
 
-data Context a = Context (MVar (RSP a))
+--------------------------------------------------------------------------------
+
+newEvent :: IO (Event b)
+newEvent = undefined
+
+newtype Context a = Context (MVar (EventIdInt, RSP a))
+
+type Application a r = (a -> IO (Context r)) -> IO (Context r)
 
 runRSP :: RSP a -> IO (Context a)
-runRSP = undefined
+runRSP p = Context <$> newMVar (0, p)
 
-global :: (Event b -> (b -> IO (Maybe a)) -> Context a) -> Context a
+emitG :: Event a -> a -> Context b -> IO (Maybe b)
+emitG e a (Context v) = modifyMVar v $ \(eid, p) -> do
+  -- TODO: advance && unblock, NOT step
+  (eid', p', u) <- step eid p
+  case (p', u) of
+    -- TODO
+    (RSP (Pure b), _) -> pure ((eid', p'), Just b)
+    (_, False) -> pure ((eid', p'), Nothing)
+
+global :: Application (Event a) r
 global f = undefined
 
 --------------------------------------------------------------------------------
@@ -173,6 +185,7 @@ unblock m rsp@(RSP (Free (Or p q next)))
 
 --------------------------------------------------------------------------------
 
+-- advance . advance == advance
 advance
   :: EventIdInt
   -> [IO ()]
@@ -244,21 +257,28 @@ gather (RSP (Free (Or p q next))) = gather p <> gather q
 
 --------------------------------------------------------------------------------
 
+step :: EventIdInt -> RSP a -> IO (EventIdInt, RSP a, Bool)
+step eid p = do
+  sequence_ ios
+  pure (eid', p'', u)
+  where
+    (eid', ios, p') = advance eid [] p
+    m = gather p'
+    (p'', u) = unblock m p'
+
 run :: RSP a -> IO a
 run = go 0
   where
     go eid p = do
+      (eid', p', u) <- step eid p
+
       -- traceIO ("*** " <> show p)
-      let (eid', ios, p') = advance eid [] p
-          m = gather p'
-          (p'', u) = unblock m p'
       -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m))
-      sequence_ ios
-      case p'' of
-        RSP (Pure a) -> pure a
-        _ -> if u
-          then go eid' p''
-          else error "Blocked"
+
+      case (p', u) of
+        (RSP (Pure a), _) -> pure a
+        (_, True) -> go eid' p'
+        (_, False) -> error "Blocked"
 
 -- Pools -----------------------------------------------------------------------
 
