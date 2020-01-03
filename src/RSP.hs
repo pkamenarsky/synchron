@@ -6,6 +6,7 @@
 
 module RSP where
 
+import Control.Applicative
 import Control.Concurrent
 import Control.Monad.Fail
 import Control.Monad.Free
@@ -25,22 +26,25 @@ import Debug.Trace
 data EventId = Internal Int | External Int
   deriving (Eq, Ord, Show)
 
-data Event a = Event EventId
+data Internal
+data External
+
+data Event t a = Event EventId
   deriving Show
 
-data ExEvent = forall a. ExEvent (Event a) a
+data EventValue = forall t a. EventValue (Event t a) a
 
-instance Show ExEvent where
-  show (ExEvent e _) = show e
+instance Show EventValue where
+  show (EventValue e _) = show e
 
 data RSPF next
   = Async (IO ()) next
 
   | Forever
 
-  | forall a b. Local (Event a -> RSP b) (b -> next)
-  | Emit ExEvent next
-  | forall a. Await (Event a) (a -> next)
+  | forall a b. Local (Event Internal a -> RSP b) (b -> next)
+  | Emit EventValue next
+  | forall t a. Await (Event t a) (a -> next)
 
   | forall a. Or (RSP a) (RSP a) ((a, RSP a) -> next)
   | forall a. And (RSP a) (RSP a) ([a] -> next)
@@ -53,15 +57,19 @@ newtype RSP a = RSP { getRSP :: Free RSPF a }
 instance MonadFail RSP where
   fail e = error e
 
+instance Alternative RSP where
+  empty = forever
+  a <|> b = orr [a, b]
+
 instance Show (RSP a) where
-  show (RSP (Pure a))            = "Pure"
-  show (RSP (Free (Async _ _)))  = "Async"
-  show (RSP (Free Forever))      = "Forever"
-  show (RSP (Free (Local _ _)))  = "Local"
-  show (RSP (Free (Emit (ExEvent (Event e) _) _))) = "Emit (" <> show e <> ")"
+  show (RSP (Pure a)) = "Pure"
+  show (RSP (Free (Async _ _))) = "Async"
+  show (RSP (Free Forever)) = "Forever"
+  show (RSP (Free (Local _ _))) = "Local"
+  show (RSP (Free (Emit (EventValue (Event e) _) _))) = "Emit (" <> show e <> ")"
   show (RSP (Free (Await (Event e) _))) = "Await (" <> show e <> ")"
-  show (RSP (Free (Or a b _)))   = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
-  show (RSP (Free (And a b _)))  = "And [" <> intercalate ", " (map show [a, b]) <> "]"
+  show (RSP (Free (Or a b _))) = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
+  show (RSP (Free (And a b _))) = "And [" <> intercalate ", " (map show [a, b]) <> "]"
 
 async :: IO () -> RSP ()
 async io = RSP $ liftF (Async io ())
@@ -69,13 +77,13 @@ async io = RSP $ liftF (Async io ())
 forever :: RSP a
 forever = RSP $ liftF Forever
 
-local :: (Event a -> RSP b) -> RSP b
+local :: (Event Internal a -> RSP b) -> RSP b
 local f = RSP $ liftF (Local f id)
 
-emit :: Event a -> a -> RSP ()
-emit e a = RSP $ liftF (Emit (ExEvent e a) ())
+emit :: Event Internal a -> a -> RSP ()
+emit e a = RSP $ liftF (Emit (EventValue e a) ())
 
-await :: Event a -> RSP a
+await :: Event t a -> RSP a
 await e = RSP $ liftF (Await e id)
 
 -- | Left biased.
@@ -95,7 +103,7 @@ andd (a:as) = concat <$> andd [(:[]) <$> a, andd as]
 nextId :: IORef Int
 nextId = unsafePerformIO (newIORef 0)
 
-newEvent :: IO (Event b)
+newEvent :: IO (Event External b)
 newEvent = Event . External <$> atomicModifyIORef' nextId (\eid -> (eid + 1, eid))
 
 newtype Context a = Context (MVar (Maybe (Int, RSP a)))
@@ -105,10 +113,10 @@ type Application a r = (a -> IO (Context r)) -> IO (Context r)
 runRSP :: RSP a -> IO (Context a)
 runRSP p = Context <$> newMVar (Just (0, p))
 
-emitG :: Context b -> Event a -> a -> IO (Maybe b)
+emitG :: Context b -> Event External a -> a -> IO (Maybe b)
 emitG (Context v) e@(Event ei) a = modifyMVar v $ \v -> case v of
   Just (eid, p) -> do
-    r <- stepAll (M.singleton ei (ExEvent e a)) eid p
+    r <- stepAll (M.singleton ei (EventValue e a)) eid p
 
     case r of
       Left a -> pure (Nothing, Just a)
@@ -116,7 +124,7 @@ emitG (Context v) e@(Event ei) a = modifyMVar v $ \v -> case v of
 
   _ -> pure (Nothing, Nothing)
 
-global :: Application (Event a) r
+global :: Application (Event External a) r
 global app = newEvent >>= app
 
 --------------------------------------------------------------------------------
@@ -144,7 +152,7 @@ liftOrr p = Orr ((,D) <$> p)
 --------------------------------------------------------------------------------
 
 unblock
-  :: M.Map EventId ExEvent
+  :: M.Map EventId EventValue
   -> RSP a
   -> (RSP a, Bool)
 
@@ -154,7 +162,7 @@ unblock _ rsp@(RSP (Pure a)) = (rsp, False)
 -- await
 unblock m rsp@(RSP (Free (Await (Event eid') next)))
   = case M.lookup eid' m of
-      Just (ExEvent _ a) -> (RSP (next $ unsafeCoerce a), True)
+      Just (EventValue _ a) -> (RSP (next $ unsafeCoerce a), True)
       Nothing -> (rsp, False)
 
 -- emit
@@ -237,7 +245,7 @@ advance eid ios rsp@(RSP (Free (Or p q next)))
 
 gather
   :: RSP a
-  -> M.Map EventId ExEvent
+  -> M.Map EventId EventValue
 
 -- pure
 gather (RSP (Pure _)) = M.empty
@@ -246,7 +254,7 @@ gather (RSP (Pure _)) = M.empty
 gather (RSP (Free (Await _ _))) = M.empty
 
 -- emit
-gather (RSP (Free (Emit e@(ExEvent (Event ei) _) next))) = M.singleton ei e
+gather (RSP (Free (Emit e@(EventValue (Event ei) _) next))) = M.singleton ei e
 
 -- and
 gather (RSP (Free (And p q next))) = gather p <> gather q
@@ -256,7 +264,7 @@ gather (RSP (Free (Or p q next))) = gather p <> gather q
 
 --------------------------------------------------------------------------------
 
-step :: M.Map EventId ExEvent -> Int -> RSP a -> IO (Int, RSP a, Bool)
+step :: M.Map EventId EventValue -> Int -> RSP a -> IO (Int, RSP a, Bool)
 step m' eid p = do
   sequence_ ios
   pure (eid', p'', u)
@@ -265,7 +273,7 @@ step m' eid p = do
     m = gather p'
     (p'', u) = unblock (m' <> m) p'
 
-stepAll :: M.Map EventId ExEvent -> Int -> RSP a -> IO (Either a (Int, RSP a))
+stepAll :: M.Map EventId EventValue -> Int -> RSP a -> IO (Either a (Int, RSP a))
 stepAll = go
   where
     go m eid p = do
@@ -288,7 +296,7 @@ run p = do
 
 -- Pools -----------------------------------------------------------------------
 
-data Pool = Pool (Event (RSP ()))
+data Pool = Pool (Event Internal (RSP ()))
 
 pool :: Show a => (Pool -> RSP a) -> RSP a
 pool f = local $ \e -> go e $ mconcat

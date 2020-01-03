@@ -54,7 +54,7 @@ p5 = run $ local $ \e -> do
     , Right <$> emit e (Right ())
     ]
   where
-    go :: Int -> Event (Either Int ()) -> RSP Int
+    go :: Int -> Event Internal (Either Int ()) -> RSP Int
     go s e = do
       a <- await e
       case a of
@@ -82,7 +82,7 @@ p7 = run $ local $ \e -> local $ \f -> do
         emit e (Right ())
     ]
   where
-    go :: Int -> Int -> Event (Either Int ()) -> Event Int -> RSP Int
+    go :: Int -> Int -> Event Internal (Either Int ()) -> Event Internal Int -> RSP Int
     go x y e f = do
       a <- orr [ Left <$> await e, Right <$> await f ]
       case a of
