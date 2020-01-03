@@ -16,18 +16,13 @@ import Data.Maybe (fromJust, isJust, isNothing, listToMaybe, mapMaybe)
 import qualified Data.Map as M
 
 import Unsafe.Coerce (unsafeCoerce)
+import System.IO.Unsafe (unsafePerformIO)
 
 import Debug.Trace
 
 --------------------------------------------------------------------------------
 
-newtype EventIdInt = EventIdInt Int
-  deriving (Num, Eq, Ord, Show)
-
-newtype EventIdRef = EventIdRef (IORef ())
-  deriving Eq
-
-data EventId = I EventIdInt -- | R EventIdRef
+data EventId = Internal Int | External Int
   deriving (Eq, Ord, Show)
 
 data Event a = Event EventId
@@ -63,10 +58,8 @@ instance Show (RSP a) where
   show (RSP (Free (Async _ _)))  = "Async"
   show (RSP (Free Forever))      = "Forever"
   show (RSP (Free (Local _ _)))  = "Local"
-  show (RSP (Free (Emit (ExEvent (Event (I (EventIdInt e))) _) _))) = "Emit (" <> show e <> ")"
-  show (RSP (Free (Emit _ _)))   = "Emit"
-  show (RSP (Free (Await (Event (I (EventIdInt e))) _))) = "Await (" <> show e <> ")"
-  show (RSP (Free (Await _ _)))  = "Await"
+  show (RSP (Free (Emit (ExEvent (Event e) _) _))) = "Emit (" <> show e <> ")"
+  show (RSP (Free (Await (Event e) _))) = "Await (" <> show e <> ")"
   show (RSP (Free (Or a b _)))   = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
   show (RSP (Free (And a b _)))  = "And [" <> intercalate ", " (map show [a, b]) <> "]"
 
@@ -98,27 +91,33 @@ andd (a:as) = concat <$> andd [(:[]) <$> a, andd as]
 
 --------------------------------------------------------------------------------
 
-newEvent :: IO (Event b)
-newEvent = undefined
+{-# NOINLINE nextId #-}
+nextId :: IORef Int
+nextId = unsafePerformIO (newIORef 0)
 
-newtype Context a = Context (MVar (EventIdInt, RSP a))
+newEvent :: IO (Event b)
+newEvent = Event . External <$> atomicModifyIORef' nextId (\eid -> (eid + 1, eid))
+
+newtype Context a = Context (MVar (Maybe (Int, RSP a)))
 
 type Application a r = (a -> IO (Context r)) -> IO (Context r)
 
 runRSP :: RSP a -> IO (Context a)
-runRSP p = Context <$> newMVar (0, p)
+runRSP p = Context <$> newMVar (Just (0, p))
 
-emitG :: Event a -> a -> Context b -> IO (Maybe b)
-emitG e a (Context v) = modifyMVar v $ \(eid, p) -> do
-  -- TODO: advance && unblock, NOT step
-  (eid', p', u) <- step eid p
-  case (p', u) of
-    -- TODO
-    (RSP (Pure b), _) -> pure ((eid', p'), Just b)
-    (_, False) -> pure ((eid', p'), Nothing)
+emitG :: Context b -> Event a -> a -> IO (Maybe b)
+emitG (Context v) e@(Event ei) a = modifyMVar v $ \v -> case v of
+  Just (eid, p) -> do
+    r <- stepAll (M.singleton ei (ExEvent e a)) eid p
+
+    case r of
+      Left a -> pure (Nothing, Just a)
+      Right (eid', p') -> pure (Just (eid', p'), Nothing)
+
+  _ -> pure (Nothing, Nothing)
 
 global :: Application (Event a) r
-global f = undefined
+global app = newEvent >>= app
 
 --------------------------------------------------------------------------------
 
@@ -187,10 +186,10 @@ unblock m rsp@(RSP (Free (Or p q next)))
 
 -- advance . advance == advance
 advance
-  :: EventIdInt
+  :: Int
   -> [IO ()]
   -> RSP a
-  -> (EventIdInt, [IO ()], RSP a)
+  -> (Int, [IO ()], RSP a)
 
 -- pure
 advance eid ios rsp@(RSP (Pure a))
@@ -202,7 +201,7 @@ advance eid ios rsp@(RSP (Free (Await _ _)))
 
 -- local
 advance eid ios (RSP (Free (Local f next)))
-  = advance (eid + 1) ios (f (Event (I eid)) >>= RSP . next)
+  = advance (eid + 1) ios (f (Event (Internal eid)) >>= RSP . next)
 
 -- emit
 advance eid ios rsp@(RSP (Free (Emit _ _)))
@@ -257,28 +256,35 @@ gather (RSP (Free (Or p q next))) = gather p <> gather q
 
 --------------------------------------------------------------------------------
 
-step :: EventIdInt -> RSP a -> IO (EventIdInt, RSP a, Bool)
-step eid p = do
+step :: M.Map EventId ExEvent -> Int -> RSP a -> IO (Int, RSP a, Bool)
+step m' eid p = do
   sequence_ ios
   pure (eid', p'', u)
   where
     (eid', ios, p') = advance eid [] p
     m = gather p'
-    (p'', u) = unblock m p'
+    (p'', u) = unblock (m' <> m) p'
 
-run :: RSP a -> IO a
-run = go 0
+stepAll :: M.Map EventId ExEvent -> Int -> RSP a -> IO (Either a (Int, RSP a))
+stepAll = go
   where
-    go eid p = do
-      (eid', p', u) <- step eid p
+    go m eid p = do
+      (eid', p', u) <- step m eid p
 
       -- traceIO ("*** " <> show p)
       -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m))
 
       case (p', u) of
-        (RSP (Pure a), _) -> pure a
-        (_, True) -> go eid' p'
-        (_, False) -> error "Blocked"
+        (RSP (Pure a), _) -> pure (Left a)
+        (_, True) -> go M.empty eid' p'
+        (_, False) -> pure (Right (eid', p'))
+
+run :: RSP a -> IO a
+run p = do
+  r <- stepAll M.empty 0 p
+  case r of
+    Left a -> pure a
+    Right _ -> error "Blocked"
 
 -- Pools -----------------------------------------------------------------------
 

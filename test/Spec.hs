@@ -1,4 +1,5 @@
 import Data.Maybe (fromJust)
+import Data.IORef
 
 import Test.Tasty
 import Test.Tasty.HUnit
@@ -138,10 +139,44 @@ p11 = run $ do
   (c, ks'') <- fromJust $ runOrr ks'
   pure (a, b, c)
 
+e12 result = global $ \e -> do
+  ctx <- runRSP $ do
+    a <- andd [ await e, await e ]
+    async (result a)
+
+  emitG ctx e "E"
+
+  pure ctx
+
+e13 result = global $ \e -> do
+  ctx <- runRSP $ local $ \f -> do
+    a <- andd [ Left <$> await e, Left <$> await e, Left <$> await e, Right <$> emit f "F" ]
+    async (result a)
+
+  emitG ctx e "E"
+
+  pure ctx
+
+e14 result = global $ \e -> do
+  ctx <- runRSP $ local $ \f -> do
+    a <- andd [ Left <$> await e, Left <$> await e, Left <$> ((,) <$> await f <*> await f), Right <$> (emit f "F" >> emit f "F") ]
+    async (result a)
+
+  emitG ctx e ("E","E")
+
+  pure ctx
+
 --------------------------------------------------------------------------------
 
 test :: (Show a, Eq a) => IO a -> a -> Assertion
 test f a = f >>= (@?= a)
+
+testE :: (Show a, Eq a) => ((a -> IO ()) -> IO (Context b)) -> a -> Assertion
+testE f a = do
+  v <- newIORef Nothing
+  f (writeIORef v . Just)
+  b <- readIORef v
+  b @?= Just a
 
 main :: IO ()
 main = defaultMain $ testGroup "Unit tests"
@@ -163,4 +198,8 @@ main = defaultMain $ testGroup "Unit tests"
   , testCase "p9_2" $ test p9_2 18
   , testCase "p10" $ test p10 [Left 6,Right ()]
   , testCase "p11" $ test p11 ("a","b","c")
+
+  , testCase "e12" $ testE e12 ["E", "E"]
+  , testCase "e13" $ testE e13 [Left "E",Left "E",Left "E",Right ()]
+  , testCase "e14" $ testE e14 [Left ("E","E"),Left ("E","E"),Left ("F","F"),Right ()]
   ]
