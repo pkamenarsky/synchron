@@ -55,6 +55,10 @@ p7 = run $ local $ \e -> local $ \f -> do
     [ Left  <$> go 0 0 e f
     , Right <$> do
         emit f 1
+        emit f 2
+        emit f 3
+        emit f 6
+        emit f 8
         emit e (Right ())
     ]
   where
@@ -68,7 +72,7 @@ p7 = run $ local $ \e -> local $ \f -> do
         _              -> pure (x + y)
 
 p8 = run $ pool $ \p -> local $ \e -> do
-  [Left a, _] <- andd [ Left <$> await e, Right <$> spawn p (emit e 5) ]
+  [Left a, _] <- andd [ Left <$> await e, Right <$> emit e 5 ]
   [Left b, _] <- andd [ Left <$> await e, Right <$> spawn p (emit e 5) ]
 
   pure (a + b)
@@ -131,7 +135,7 @@ test f a = f >>= (@?= a)
 
 main :: IO ()
 main = defaultMain $ testGroup "Unit tests"
-  [ testCase "p1" $ test p1 ([Left "C",Right (),Right ()],Right ())
+  [ testCase "p1" $ test p1 ([Left "A",Right (),Right ()],Left "B")
   , testCase "p2" $ test p2 [Left (),Right "E"]
   , testCase "p3" $ test p3 [Left (),Right "F",Left ()]
   , testCase "p4" $ test p4 [Left [Left "E",Right ()],Right "F",Left [Left "_",Right ()]]

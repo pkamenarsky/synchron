@@ -246,7 +246,7 @@ unblock m rsp@(RSP (Free (Await (Event eid') next)))
       Nothing -> (rsp, False)
 
 -- emit
-unblock m rsp@(RSP (Free (Emit _ _))) = (rsp, False)
+unblock m rsp@(RSP (Free (Emit _ next))) = (RSP next, True)
 
 -- and
 unblock m rsp@(RSP (Free (And p q next)))
@@ -348,11 +348,11 @@ run = go 0
   where
     go 100 p = error "END"
     go eid p = do
-      traceIO ("*** " <> show p)
+      -- traceIO ("*** " <> show p)
       let (eid', ios, p') = advance eid [] p
           m = gather p'
           (p'', u) = unblock m p'
-      traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m))
+      -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m))
       sequence_ ios
       case p'' of
         RSP (Pure a) -> pure a
