@@ -6,6 +6,7 @@
 
 module RSP where
 
+import Control.Concurrent
 import Control.Monad.Fail
 import Control.Monad.Free
 
@@ -98,6 +99,14 @@ andd :: [RSP a] -> RSP [a]
 andd [a] = (:[]) <$> a
 andd [a, b] = RSP $ liftF (And a b id)
 andd (a:as) = concat <$> andd [(:[]) <$> a, andd as]
+
+data Context a = Context (MVar (RSP a))
+
+runRSP :: RSP a -> IO (Context a)
+runRSP = undefined
+
+global :: (Event b -> (b -> IO ()) -> IO ()) -> IO ()
+global = undefined
 
 --------------------------------------------------------------------------------
 
