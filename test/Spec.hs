@@ -6,33 +6,33 @@ import Test.Tasty.HUnit
 
 import RSP
 
-p1 = run $ local $ \e -> do
+p1 = exhaust $ local $ \e -> do
   a <- andd [ Left <$> await e, Right <$> emit e "A", Right <$> emit e "C" ]
   b <- orr [ Left <$> await e, Right <$> emit e "B" ]
   pure (a, b)
 
-p2 = run $ local $ \e -> do
+p2 = exhaust $ local $ \e -> do
   andd [ Left <$> emit e "E", Right <$> await e ]
 
-p2_2 = run $ local $ \e -> do
+p2_2 = exhaust $ local $ \e -> do
   andd [ Right <$> await e, Left <$> emit e "E" ]
 
-p2_3 = run $ local $ \e -> do
+p2_3 = exhaust $ local $ \e -> do
   andd [ Left <$> (emit e "E" >> emit e "F"), Right <$> ((,) <$> await e <*> await e) ]
 
-p2_4 = run $ local $ \e -> local $ \f -> do
+p2_4 = exhaust $ local $ \e -> local $ \f -> do
   andd [ Left <$> (andd [ await e, await f ]), Right <$> orr [ emit e 5, emit f 6 ] ]
 
-p2_5 = run $ local $ \e -> local $ \f -> do
+p2_5 = exhaust $ local $ \e -> local $ \f -> do
   andd [ Left <$> (orr [ await e, await f ]), Right <$> orr [ emit e 5, emit f 6 ] ]
 
-p2_6 = run $ local $ \e -> do
+p2_6 = exhaust $ local $ \e -> do
   orr [ Left <$> emit e "E", Right <$> await e ]
 
-p2_7 = run $ local $ \e -> do
+p2_7 = exhaust $ local $ \e -> do
   orr [ Right <$> await e, Left <$> emit e "E" ]
 
-p3 = run $ local $ \e -> local $ \f -> do
+p3 = exhaust $ local $ \e -> local $ \f -> do
   a <- andd
     [ Left  <$> (await e >> emit f "F")
     , Right <$> await f
@@ -40,7 +40,7 @@ p3 = run $ local $ \e -> local $ \f -> do
     ]
   pure a
 
-p4 = run $ local $ \e -> local $ \f -> do
+p4 = exhaust $ local $ \e -> local $ \f -> do
   a <- andd
     [ Left  <$> andd [ Left <$> await e, Right <$> emit f "F" ]
     , Right <$> await f
@@ -48,7 +48,7 @@ p4 = run $ local $ \e -> local $ \f -> do
     ]
   pure a
 
-p5 = run $ local $ \e -> do
+p5 = exhaust $ local $ \e -> do
   andd
     [ Left  <$> go 0 e
     , Right <$> emit e (Right ())
@@ -61,7 +61,7 @@ p5 = run $ local $ \e -> do
         Left n  -> go (s + n) e
         Right _ -> pure s
 
-p6 = run $ local $ \e -> local $ \f -> local $ \g -> do
+p6 = exhaust $ local $ \e -> local $ \f -> local $ \g -> do
   a <- andd
     [ Left  <$> andd [ Left <$> await e, Right <$> (emit f "F" >> await g >> emit e "E") ]
     , Right <$> andd [ await f, await g, await e ]
@@ -70,7 +70,7 @@ p6 = run $ local $ \e -> local $ \f -> local $ \g -> do
     ]
   pure a
 
-p7 = run $ local $ \e -> local $ \f -> do
+p7 = exhaust $ local $ \e -> local $ \f -> do
   andd
     [ Left  <$> go 0 0 e f
     , Right <$> do
@@ -90,13 +90,13 @@ p7 = run $ local $ \e -> local $ \f -> do
         Right y'       -> go x (y + y') e f
         _              -> pure (x + y)
 
-p8 = run $ pool $ \p -> local $ \e -> do
+p8 = exhaust $ pool $ \p -> local $ \e -> do
   [Left a, _] <- andd [ Left <$> await e, Right <$> emit e 5 ]
   [Left b, _] <- andd [ Left <$> await e, Right <$> spawn p (emit e 5) ]
 
   pure (a + b)
 
-p9 = run $ local $ \e -> pool $ \p -> do
+p9 = exhaust $ local $ \e -> pool $ \p -> do
   spawn p (emit e 5)
   a <- await e
 
@@ -108,7 +108,7 @@ p9 = run $ local $ \e -> pool $ \p -> do
 
   pure (a + b + c)
 
-p9_2 = run $ local $ \e -> pool $ \p -> do
+p9_2 = exhaust $ local $ \e -> pool $ \p -> do
   spawn p (emit e 5)
   a <- await e
 
@@ -118,7 +118,7 @@ p9_2 = run $ local $ \e -> pool $ \p -> do
 
   pure (a + b + c)
 
-p10 = run $ local $ \i -> local $ \o -> pool $ \p -> do
+p10 = exhaust $ local $ \i -> local $ \o -> pool $ \p -> do
   spawn p (go i o 0 3)
 
   andd [ Left <$> await o, Right <$> (emit i 1 >> spawn p (emit i 2 >> spawn p (emit i 3))) ]
@@ -129,7 +129,7 @@ p10 = run $ local $ \i -> local $ \o -> pool $ \p -> do
       a <- await i
       go i o (x + a) (n - 1)
 
-p11 = run $ do
+p11 = exhaust $ do
   (a, ks) <- fromJust $ runOrr $ mconcat
     [ liftOrr (pure "a")
     , liftOrr (pure "b")
@@ -139,30 +139,30 @@ p11 = run $ do
   (c, ks'') <- fromJust $ runOrr ks'
   pure (a, b, c)
 
-e12 result = global $ \e -> do
-  ctx <- runRSP $ do
+e12 result = event $ \e -> do
+  ctx <- run $ do
     a <- andd [ await e, await e ]
     async (result a)
 
-  emitG ctx e "E"
+  push ctx e "E"
 
   pure ctx
 
-e13 result = global $ \e -> do
-  ctx <- runRSP $ local $ \f -> do
+e13 result = event $ \e -> do
+  ctx <- run $ local $ \f -> do
     a <- andd [ Left <$> await e, Left <$> await e, Left <$> await e, Right <$> emit f "F" ]
     async (result a)
 
-  emitG ctx e "E"
+  push ctx e "E"
 
   pure ctx
 
-e14 result = global $ \e -> do
-  ctx <- runRSP $ local $ \f -> do
+e14 result = event $ \e -> do
+  ctx <- run $ local $ \f -> do
     a <- andd [ Left <$> await e, Left <$> await e, Left <$> ((,) <$> await f <*> await f), Right <$> (emit f "F" >> emit f "F") ]
     async (result a)
 
-  emitG ctx e ("E","E")
+  push ctx e ("E","E")
 
   pure ctx
 

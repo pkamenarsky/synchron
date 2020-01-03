@@ -99,36 +99,6 @@ andd (a:as) = concat <$> andd [(:[]) <$> a, andd as]
 
 --------------------------------------------------------------------------------
 
-{-# NOINLINE nextId #-}
-nextId :: IORef Int
-nextId = unsafePerformIO (newIORef 0)
-
-newEvent :: IO (Event External b)
-newEvent = Event . External <$> atomicModifyIORef' nextId (\eid -> (eid + 1, eid))
-
-newtype Context a = Context (MVar (Maybe (Int, RSP a)))
-
-type Application a r = (a -> IO (Context r)) -> IO (Context r)
-
-runRSP :: RSP a -> IO (Context a)
-runRSP p = Context <$> newMVar (Just (0, p))
-
-emitG :: Context b -> Event External a -> a -> IO (Maybe b)
-emitG (Context v) e@(Event ei) a = modifyMVar v $ \v -> case v of
-  Just (eid, p) -> do
-    r <- stepAll (M.singleton ei (EventValue e a)) eid p
-
-    case r of
-      Left a -> pure (Nothing, Just a)
-      Right (eid', p') -> pure (Just (eid', p'), Nothing)
-
-  _ -> pure (Nothing, Nothing)
-
-global :: Application (Event External a) r
-global app = newEvent >>= app
-
---------------------------------------------------------------------------------
-
 data Orr a = Orr (RSP (a, Orr a)) | D
   deriving Show
 
@@ -149,7 +119,7 @@ instance Monoid (Orr a) where
 liftOrr :: RSP a -> Orr a
 liftOrr p = Orr ((,D) <$> p)
 
---------------------------------------------------------------------------------
+-- unblock ---------------------------------------------------------------------
 
 unblock
   :: M.Map EventId EventValue
@@ -190,7 +160,7 @@ unblock m rsp@(RSP (Free (Or p q next)))
     (p', up) = unblock m p
     (q', uq) = unblock m q
 
---------------------------------------------------------------------------------
+-- advance ---------------------------------------------------------------------
 
 -- advance . advance == advance
 advance
@@ -241,7 +211,7 @@ advance eid ios rsp@(RSP (Free (Or p q next)))
     (eid', ios', p') = advance (eid + 1) ios p
     (eid'', ios'', q') = advance (eid' + 1) ios' q
 
---------------------------------------------------------------------------------
+-- gather ----------------------------------------------------------------------
 
 gather
   :: RSP a
@@ -264,8 +234,8 @@ gather (RSP (Free (Or p q next))) = gather p <> gather q
 
 --------------------------------------------------------------------------------
 
-step :: M.Map EventId EventValue -> Int -> RSP a -> IO (Int, RSP a, Bool)
-step m' eid p = do
+stepOnce :: M.Map EventId EventValue -> Int -> RSP a -> IO (Int, RSP a, Bool)
+stepOnce m' eid p = do
   sequence_ ios
   pure (eid', p'', u)
   where
@@ -277,7 +247,7 @@ stepAll :: M.Map EventId EventValue -> Int -> RSP a -> IO (Either a (Int, RSP a)
 stepAll = go
   where
     go m eid p = do
-      (eid', p', u) <- step m eid p
+      (eid', p', u) <- stepOnce m eid p
 
       -- traceIO ("*** " <> show p)
       -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m))
@@ -287,8 +257,8 @@ stepAll = go
         (_, True) -> go M.empty eid' p'
         (_, False) -> pure (Right (eid', p'))
 
-run :: RSP a -> IO a
-run p = do
+exhaust :: RSP a -> IO a
+exhaust p = do
   r <- stepAll M.empty 0 p
   case r of
     Left a -> pure a
@@ -319,3 +289,33 @@ pool f = local $ \e -> go e $ mconcat
 spawn :: Pool -> RSP () -> RSP ()
 spawn (Pool e) p = do
   emit e p
+
+--------------------------------------------------------------------------------
+
+{-# NOINLINE nextId #-}
+nextId :: IORef Int
+nextId = unsafePerformIO (newIORef 0)
+
+newEvent :: IO (Event External b)
+newEvent = Event . External <$> atomicModifyIORef' nextId (\eid -> (eid + 1, eid))
+
+newtype Context a = Context (MVar (Maybe (Int, RSP a)))
+
+type Application a r = (a -> IO (Context r)) -> IO (Context r)
+
+run :: RSP a -> IO (Context a)
+run p = Context <$> newMVar (Just (0, p))
+
+push :: Context b -> Event External a -> a -> IO (Maybe b)
+push (Context v) e@(Event ei) a = modifyMVar v $ \v -> case v of
+  Just (eid, p) -> do
+    r <- stepAll (M.singleton ei (EventValue e a)) eid p
+
+    case r of
+      Left a -> pure (Nothing, Just a)
+      Right (eid', p') -> pure (Just (eid', p'), Nothing)
+
+  _ -> pure (Nothing, Nothing)
+
+event :: Application (Event External a) r
+event app = newEvent >>= app
