@@ -4,7 +4,7 @@ import Data.IORef
 import Test.Tasty
 import Test.Tasty.HUnit
 
-import RSP
+import Syn
 
 p1 = exhaust $ local $ \e -> do
   a <- andd [ Left <$> await e, Right <$> emit e "A", Right <$> emit e "C" ]
@@ -54,7 +54,7 @@ p5 = exhaust $ local $ \e -> do
     , Right <$> emit e (Right ())
     ]
   where
-    go :: Int -> Event Internal (Either Int ()) -> RSP Int
+    go :: Int -> Event Internal (Either Int ()) -> Syn Int
     go s e = do
       a <- await e
       case a of
@@ -82,7 +82,7 @@ p7 = exhaust $ local $ \e -> local $ \f -> do
         emit e (Right ())
     ]
   where
-    go :: Int -> Int -> Event Internal (Either Int ()) -> Event Internal Int -> RSP Int
+    go :: Int -> Int -> Event Internal (Either Int ()) -> Event Internal Int -> Syn Int
     go x y e f = do
       a <- orr [ Left <$> await e, Right <$> await f ]
       case a of

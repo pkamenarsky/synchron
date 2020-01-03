@@ -8,7 +8,7 @@
 
 module Connector.WebSocket where
 
-import qualified RSP
+import qualified Syn
 
 import Control.Applicative
 import Control.Concurrent
@@ -35,16 +35,16 @@ import Network.WebSockets.Connection
 
 import Debug.Trace
 
-data WebSocketServer s = WebSocketServer (RSP.Event RSP.External WebSocket)
+data WebSocketServer s = WebSocketServer (Syn.Event Syn.External WebSocket)
 
-data WebSocket = WebSocket (RSP.Event RSP.External DataMessage) (TVar (TChan DataMessage))
+data WebSocket = WebSocket (Syn.Event Syn.External DataMessage) (TVar (TChan DataMessage))
 
 websocket
   :: Port
   -> ConnectionOptions
-  -> (forall s. WebSocketServer s -> IO (RSP.Context a))
-  -> IO (RSP.Context a)
-websocket port options k = RSP.event $ \e -> do
+  -> (forall s. WebSocketServer s -> IO (Syn.Context a))
+  -> IO (Syn.Context a)
+websocket port options k = Syn.event $ \e -> do
   ctx <- k (WebSocketServer e)
   forkIO (go ctx e)
 
@@ -56,21 +56,21 @@ websocket port options k = RSP.event $ \e -> do
     wsApp ctx e pending = do
       conn  <- acceptRequest pending
 
-      inCh  <- RSP.newEvent
+      inCh  <- Syn.newEvent
       outCh <- newTChanIO
 
       forkPingThread conn 30
 
       let inA = forever $ do
             r <- receiveDataMessage conn
-            RSP.push ctx inCh r
+            Syn.push ctx inCh r
 
           inB = forever $ do
             r <- atomically $ readTChan outCh
             sendDataMessage conn r
 
       wRef <- newTVarIO outCh
-      RSP.push ctx e (WebSocket inCh wRef)
+      Syn.push ctx e (WebSocket inCh wRef)
 
       void $ withAsync inA $ \a -> do
         withAsync inB $ \b -> do
@@ -81,13 +81,13 @@ websocket port options k = RSP.event $ \e -> do
 
     backupApp _ respond = respond $ responseLBS status400 [] "Not a WebSocket request"
 
-accept :: WebSocketServer s -> RSP.RSP WebSocket
-accept (WebSocketServer e) = RSP.await e
+accept :: WebSocketServer s -> Syn.Syn WebSocket
+accept (WebSocketServer e) = Syn.await e
 
-receive :: WebSocket -> RSP.RSP DataMessage
-receive (WebSocket e _) = RSP.await e
+receive :: WebSocket -> Syn.Syn DataMessage
+receive (WebSocket e _) = Syn.await e
 
-send :: WebSocket -> DataMessage -> RSP.RSP ()
-send (WebSocket _ v) m = RSP.async $ atomically $ do
+send :: WebSocket -> DataMessage -> Syn.Syn ()
+send (WebSocket _ v) m = Syn.async $ atomically $ do
   outCh <- readTVar v
   writeTChan outCh m

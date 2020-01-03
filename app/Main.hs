@@ -14,7 +14,7 @@ import qualified Connector.Log as Log
 import qualified Connector.HTTP as HTTP
 
 import Concur
-import qualified RSP
+import qualified Syn
 
 import Network.HTTP.Types.Status
 import Network.WebSockets.Connection
@@ -89,8 +89,8 @@ testConcur = Log.logger $ \log -> do
 
 testWebsockets =
   WS.websocket 3922 defaultConnectionOptions $ \wss -> do
-  WS.websocket 3923 defaultConnectionOptions $ \wss2 -> RSP.run $ do
-    [ws, ws2] <- RSP.andd [ WS.accept wss, WS.accept wss2 ]
+  WS.websocket 3923 defaultConnectionOptions $ \wss2 -> Syn.run $ do
+    [ws, ws2] <- Syn.andd [ WS.accept wss, WS.accept wss2 ]
 
     d <- WS.receive ws
     d2 <- WS.receive ws2
@@ -103,21 +103,21 @@ testWebsockets =
 
 testChat
   = WS.websocket 3922 defaultConnectionOptions $ \wss ->
-    RSP.run $
-    RSP.pool $ \p ->
-    RSP.local $ \msg -> do
+    Syn.run $
+    Syn.pool $ \p ->
+    Syn.local $ \msg -> do
       acceptConn p wss msg
   where
     acceptConn p wss msg = do
       ws <- WS.accept wss
-      RSP.spawn p (chatConn ws msg)
+      Syn.spawn p (chatConn ws msg)
       acceptConn p wss msg
 
     chatConn ws msg = do
-      r <- RSP.orr [ Left <$> WS.receive ws, Right <$> RSP.await msg ]
+      r <- Syn.orr [ Left <$> WS.receive ws, Right <$> Syn.await msg ]
       case r of
         Left m -> do
-          RSP.emit msg m
+          Syn.emit msg m
           WS.send ws m
         Right msg -> WS.send ws msg
       chatConn ws msg
