@@ -90,7 +90,7 @@ testConcur = Log.logger $ \log -> do
 testWebsockets =
   WS.websocket 3922 defaultConnectionOptions $ \wss -> do
   WS.websocket 3923 defaultConnectionOptions $ \wss2 -> Syn.run $ do
-    [ws, ws2] <- Syn.andd [ WS.accept wss, WS.accept wss2 ]
+    (ws, ws2) <- Syn.andd (WS.accept wss, WS.accept wss2)
 
     d <- WS.receive ws
     d2 <- WS.receive ws2
