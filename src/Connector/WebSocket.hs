@@ -8,8 +8,7 @@
 
 module Connector.WebSocket where
 
-import Concur
-import Connector.Log
+import qualified RSP
 
 import Control.Applicative
 import Control.Concurrent
@@ -36,72 +35,59 @@ import Network.WebSockets.Connection
 
 import Debug.Trace
 
-data WebSocketServer s = WebSocketServer (TChan WebSocket)
+data WebSocketServer s = WebSocketServer (RSP.Event RSP.External WebSocket)
 
-newtype WebSocket = WebSocket (TVar (Maybe (TChan DataMessage, TChan DataMessage)))
+data WebSocket = WebSocket (RSP.Event RSP.External DataMessage) (TVar (TChan DataMessage))
 
 websocket
   :: Port
   -> ConnectionOptions
-  -> (forall s. WebSocketServer s -> IO ())
-  -> IO ()
-websocket port options k = do
-  ch <- newTChanIO
+  -> (forall s. WebSocketServer s -> IO (RSP.Context a))
+  -> IO (RSP.Context a)
+websocket port options k = RSP.event $ \e -> do
+  ctx <- k (WebSocketServer e)
+  forkIO (go ctx e)
 
-  withAsync (go ch) $ \as -> do
-    k $ WebSocketServer ch
-    cancel as
+  pure ctx
 
   where
-    go ch = run port $ websocketsOr defaultConnectionOptions (wsApp ch) backupApp
+    go ctx e = run port $ websocketsOr defaultConnectionOptions (wsApp ctx e) backupApp
 
-    wsApp ch pending = do
+    wsApp ctx e pending = do
       conn  <- acceptRequest pending
 
-      inCh  <- newTChanIO
+      inCh  <- RSP.newEvent
       outCh <- newTChanIO
 
       forkPingThread conn 30
 
       let inA = forever $ do
             r <- receiveDataMessage conn
-            atomically $ writeTChan inCh r
+            RSP.push ctx inCh r
 
           inB = forever $ do
             r <- atomically $ readTChan outCh
             sendDataMessage conn r
 
-      ws <- newTVarIO $ Just (inCh, outCh)
-      atomically $ writeTChan ch (WebSocket ws)
+      wRef <- newTVarIO outCh
+      RSP.push ctx e (WebSocket inCh wRef)
 
-      withAsync inA $ \a -> do
+      void $ withAsync inA $ \a -> do
         withAsync inB $ \b -> do
-          mkWeakTVar ws $ do
+          mkWeakTVar wRef $ do
             cancel a
             cancel b
           waitEitherCatchCancel a b
 
-      atomically $ writeTVar ws Nothing
-
     backupApp _ respond = respond $ responseLBS status400 [] "Not a WebSocket request"
 
-accept :: WebSocketServer s -> Concur WebSocket
-accept (WebSocketServer ch) = step $ readTChan ch
+accept :: WebSocketServer s -> RSP.RSP WebSocket
+accept (WebSocketServer e) = RSP.await e
 
-receive :: WebSocket -> Concur (Maybe DataMessage)
-receive (WebSocket v) = step $ do
-  ws <- readTVar v
+receive :: WebSocket -> RSP.RSP DataMessage
+receive (WebSocket e _) = RSP.await e
 
-  case ws of
-    Just (inCh, _) -> Just <$> readTChan inCh
-    Nothing        -> pure Nothing
-
-send :: WebSocket -> DataMessage -> Concur Bool
-send (WebSocket v) m = step $ do
-  ws <- readTVar v
-
-  case ws of
-    Just (_, outCh) -> do
-      writeTChan outCh m
-      pure True
-    Nothing -> pure False
+send :: WebSocket -> DataMessage -> RSP.RSP ()
+send (WebSocket _ v) m = RSP.async $ atomically $ do
+  outCh <- readTVar v
+  writeTChan outCh m

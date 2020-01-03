@@ -268,7 +268,7 @@ exhaust p = do
 
 data Pool = Pool (Event Internal (RSP ()))
 
-pool :: Show a => (Pool -> RSP a) -> RSP a
+pool :: (Pool -> RSP a) -> RSP a
 pool f = local $ \e -> go e $ mconcat
   [ liftOrr (Right . Left <$> await e)
   , liftOrr (Left <$> f (Pool e))

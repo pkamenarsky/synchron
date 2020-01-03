@@ -14,6 +14,7 @@ import qualified Connector.Log as Log
 import qualified Connector.HTTP as HTTP
 
 import Concur
+import qualified RSP
 
 import Network.HTTP.Types.Status
 import Network.WebSockets.Connection
@@ -54,37 +55,72 @@ testConcur = Log.logger $ \log -> do
       step $ writeTChan c (show n)
       f c (n + 1)
 
-testConnectors :: IO ()
-testConnectors = do
-  HTTP.http 3921 $ \http ->
-    WS.websocket 3922 defaultConnectionOptions $ \wss ->
-    WS.websocket 3923 defaultConnectionOptions $ \wss2 ->
-    Log.logger $ \log -> do
+-- testConnectors :: IO ()
+-- testConnectors = do
+--   HTTP.http 3921 $ \http ->
+--     WS.websocket 3922 defaultConnectionOptions $ \wss ->
+--     WS.websocket 3923 defaultConnectionOptions $ \wss2 ->
+--     Log.logger $ \log -> do
+-- 
+--       runConcur $ auth http log wss wss2
+-- 
+--     where
+--       auth http log wss wss2 = do
+--         r <- HTTP.receive http $ \req respond -> do
+--           r <- respond $ responseLBS status200 [] "Hello World"
+--           pure (r, "good")
+--         log r
+--         server log wss wss2
+--       
+--       server log wss wss2 = withPool $ \pool -> forever $ do
+--         [ws, ws2] <- andd [ WS.accept wss, WS.accept wss2 ]
+--         spawn pool (go log ws ws2)
+--         
+--       go log ws ws2 = do
+--         r <- orr
+--           [ fmap Left  <$> WS.receive ws
+--           , fmap Right <$> WS.receive ws2
+--           ]
+--         case r of
+--           Nothing  -> pure ()
+--           _  -> do
+--             log $ show r
+--             go log ws ws2
 
-      runConcur $ auth http log wss wss2
+testWebsockets =
+  WS.websocket 3922 defaultConnectionOptions $ \wss -> do
+  WS.websocket 3923 defaultConnectionOptions $ \wss2 -> RSP.run $ do
+    [ws, ws2] <- RSP.andd [ WS.accept wss, WS.accept wss2 ]
 
-    where
-      auth http log wss wss2 = do
-        r <- HTTP.receive http $ \req respond -> do
-          r <- respond $ responseLBS status200 [] "Hello World"
-          pure (r, "good")
-        log r
-        server log wss wss2
-      
-      server log wss wss2 = withPool $ \pool -> forever $ do
-        [ws, ws2] <- andd [ WS.accept wss, WS.accept wss2 ]
-        spawn pool (go log ws ws2)
-        
-      go log ws ws2 = do
-        r <- orr
-          [ fmap Left  <$> WS.receive ws
-          , fmap Right <$> WS.receive ws2
-          ]
-        case r of
-          Nothing  -> pure ()
-          _  -> do
-            log $ show r
-            go log ws ws2
+    d <- WS.receive ws
+    d2 <- WS.receive ws2
+
+    WS.send ws d
+    WS.send ws d2
+
+    WS.send ws2 d
+    WS.send ws2 d2
+
+testChat
+  = WS.websocket 3922 defaultConnectionOptions $ \wss ->
+    RSP.run $
+    RSP.pool $ \p ->
+    RSP.local $ \msg -> do
+      acceptConn p wss msg
+  where
+    acceptConn p wss msg = do
+      ws <- WS.accept wss
+      RSP.spawn p (chatConn ws msg)
+      acceptConn p wss msg
+
+    chatConn ws msg = do
+      r <- RSP.orr [ Left <$> WS.receive ws, Right <$> RSP.await msg ]
+      case r of
+        Left m -> do
+          RSP.emit msg m
+          WS.send ws m
+        Right msg -> WS.send ws msg
+      chatConn ws msg
 
 testSignals :: IO ()
 testSignals = Log.logger $ \log -> runConcur $ do
