@@ -54,11 +54,6 @@ p7 = run $ local $ \e -> local $ \f -> do
   andd
     [ Left  <$> go 0 0 e f
     , Right <$> do
-        emit e (Left 1)
-        emit e (Left 2)
-        emit e (Left 3)
-        emit e (Left 4)
-        emit f 9
         emit f 1
         emit e (Right ())
     ]
@@ -66,6 +61,7 @@ p7 = run $ local $ \e -> local $ \f -> do
     go :: Int -> Int -> Event (Either Int ()) -> Event Int -> RSP Int
     go x y e f = do
       a <- orr [ Left <$> await e, Right <$> await f ]
+      async (print a)
       case a of
         Left (Left x') -> go (x + x') y e f
         Right y'       -> go x (y + y') e f
@@ -79,7 +75,6 @@ p8 = run $ pool $ \p -> local $ \e -> do
 
 p9_4 = run $ local $ \e -> pool $ \p -> do
   emit e 5
-  async (print "4")
   await e
 
 p9_5 = run $ local $ \e -> pool $ \p -> do
@@ -114,7 +109,7 @@ p9 = run $ local $ \e -> pool $ \p -> do
 p10 = run $ local $ \i -> local $ \o -> pool $ \p -> do
   spawn p (go i o 2)
 
-  andd [ Left <$> await o, Right <$> (spawn p (emit i () >> spawn p (emit i () >> spawn p (emit i ())))) ]
+  andd [ Left <$> await o, Right <$> (emit i () >> spawn p (emit i () >> spawn p (emit i ()))) ]
 
   where
     go i o 0 = emit o 12

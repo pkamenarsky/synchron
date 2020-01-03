@@ -231,97 +231,6 @@ testorr' = run $ local $ \e -> local $ \f -> local $ \g -> do
 
 --------------------------------------------------------------------------------
 
-bcast :: ExEvent -> RSP a -> RSP a
-bcast e (RSP (Free (Tag s p)))
-  = RSP (Free (Tag s (bcast e p)))
-bcast (ExEvent (Event e) a) (RSP (Free (Await (Event e') next)))
-  | e == e' = RSP (next $ unsafeCoerce a)
-bcast e (RSP (Free (And p q next)))
-  = RSP (Free (And (bcast e p) (bcast e q) next))
-bcast e (RSP (Free (Or p q next)))
-  = RSP (Free (Or (bcast e p) (bcast e q) next))
-bcast _ p = p
-
-isBlocked :: RSP a -> Bool
-isBlocked (RSP (Pure _)) = True
-isBlocked (RSP (Free (Await _ _))) = True
-isBlocked (RSP (Free (And p q _))) = isBlocked p && isBlocked q
-isBlocked (RSP (Free (Or p q _))) = isBlocked p && isBlocked q
-isBlocked _ = False
-
--- step
---   :: M.Map EventId ExEvent
---   -> M.Map EventId ExEvent
---   -> EventIdInt
---   -> [IO ()]
---   -> RSP a
---   -> (M.Map EventId ExEvent, EventIdInt, [IO ()], RSP a, Bool)
--- 
--- -- pure
--- step em m eid ios rsp@(RSP (Pure a))
---   = (m, eid, ios, rsp, False)
--- 
--- -- local
--- step em m eid ios (RSP (Free (Local f next)))
---   = step em m (eid + 1) ios (f (Event (I eid)) >>= RSP . next)
--- 
--- -- emit
--- step em m eid ios (RSP (Free (Emit e@(ExEvent (Event eid') _) next)))
---   = step em (M.insert eid' e m) (eid + 1) ios (RSP next)
--- 
--- -- await
--- step em m eid ios rsp@(RSP (Free (Await (Event eid') next)))
---   = ( m
---     , eid
---     , ios
---     , case M.lookup eid' em of
---         Just (ExEvent _ a) -> RSP (next $ unsafeCoerce a)
---         Nothing -> rsp
---     , True
---     )
--- 
--- -- hole
--- step em m eid ios (RSP (Free (Hole next)))
---   = ( m
---     , eid
---     , ios
---     , RSP (Free (HoleNext next))
---     , True
---     )
--- 
--- -- hole
--- step em m eid ios (RSP (Free (HoleNext next)))
---   = step em m eid ios (RSP next)
--- 
--- -- async
--- step em m eid ios (RSP (Free (Async io next)))
---   = step em m (eid + 1) (io:ios) (RSP next)
--- 
--- -- and
--- step em m eid ios rsp@(RSP (Free (And p q next)))
---   = case (p', q') of
---       (RSP (Pure a), RSP (Pure b)) -> if pc || qc
---         then (m'', eid'', ios'', RSP (next [a, b]), pc || qc)
---         else step em m'' eid'' ios'' (RSP (next [a, b]))
---       _ -> (m'', eid'', ios'', RSP (Free (And p' q' next)), pc || qc)
---   where
---     (m', eid', ios', p', pc) = step em m (eid + 1) ios p
---     (m'', eid'', ios'', q', qc) = step em m' (eid' + 1) ios' q
--- 
--- -- or
--- step em m eid ios rsp@(RSP (Free (Or p q next)))
---   = case (p', q') of
---       (RSP (Pure a), _) -> if pc
---         then (m', eid', ios', RSP (next (a, q')), pc)
---         else step em m' eid' ios' (RSP (next (a, q')))
---       (_, RSP (Pure b)) -> if pc || qc
---         then (m'', eid'', ios'', RSP (next (b, p')), pc || qc)
---         else step em m'' eid'' ios'' (RSP (next (b, p')))
---       _ -> (m'', eid'', ios'', RSP (Free (Or p' q' next)), pc || qc)
---   where
---     (m', eid', ios', p', pc) = step em m (eid + 1) ios p
---     (m'', eid'', ios'', q', qc) = step em m' (eid' + 1) ios' q
-
 unblock
   :: M.Map EventId ExEvent
   -> RSP a
@@ -357,6 +266,56 @@ unblock m rsp@(RSP (Free (Or p q next)))
   where
     p' = unblock m p
     q' = unblock m q
+
+--------------------------------------------------------------------------------
+
+advance
+  :: EventIdInt
+  -> [IO ()]
+  -> RSP a
+  -> (EventIdInt, [IO ()], RSP a)
+
+-- pure
+advance eid ios rsp@(RSP (Pure a))
+  = (eid, ios, rsp)
+
+-- await
+advance eid ios rsp@(RSP (Free (Await _ _)))
+  = (eid, ios, rsp)
+
+-- local
+advance eid ios (RSP (Free (Local f next)))
+  = advance (eid + 1) ios (f (Event (I eid)) >>= RSP . next)
+
+-- emit
+advance eid ios rsp@(RSP (Free (Emit _ _)))
+  = (eid, ios, rsp)
+
+-- async
+advance eid ios (RSP (Free (Async io next)))
+  = advance (eid + 1) (io:ios) (RSP next)
+
+-- and
+advance eid ios rsp@(RSP (Free (And p q next)))
+  = case (p', q') of
+      (RSP (Pure a), RSP (Pure b))
+        -> advance eid'' ios'' (RSP (next [a, b]))
+      _ -> (eid'', ios'', RSP (Free (And p' q' next)))
+  where
+    (eid', ios', p') = advance (eid + 1) ios p
+    (eid'', ios'', q') = advance (eid' + 1) ios' q
+
+-- or
+advance eid ios rsp@(RSP (Free (Or p q next)))
+  = case (p', q') of
+      (RSP (Pure a), _)
+        -> advance eid' ios' (RSP (next (a, q')))
+      (_, RSP (Pure b))
+        -> advance eid'' ios'' (RSP (next (b, p')))
+      _ -> (eid'', ios'', RSP (Free (Or p' q' next)))
+  where
+    (eid', ios', p') = advance (eid + 1) ios p
+    (eid'', ios'', q') = advance (eid' + 1) ios' q
 
 --------------------------------------------------------------------------------
 
@@ -409,98 +368,21 @@ gather m eid ios rsp@(RSP (Free (Or p q next)))
     (m', eid', ios', p') = gather m (eid + 1) ios p
     (m'', eid'', ios'', q') = gather m' (eid' + 1) ios' q
 
--- step
---   :: Maybe ExEvent
---   -> EventIdInt
---   -> RSP a
---   -> (Maybe ExEvent, EventIdInt, RSP a, IO ())
--- 
--- -- push
--- step (Just event) eid p
---   = (Nothing, eid + 1, bcast event p, pure ())
--- -- pop
--- step Nothing eid p
---   | isBlocked p = (Nothing, eid + 1, p, pure ())
--- 
--- -- local
--- step Nothing eid (RSP (Free (Local f next)))
---   = (Nothing, eid + 1, f (Event (I eid)) >>= RSP . next, pure ())
--- 
--- -- emit
--- step Nothing eid (RSP (Free (Emit e next)))
---   = (Just e, eid, RSP (next), pure ())
--- 
--- -- hole
--- step Nothing eid (RSP (Free (Hole next)))
---   = (Nothing, eid, RSP next, pure ())
--- 
--- -- async
--- step Nothing eid (RSP (Free (Async io next)))
---   = (Nothing, eid + 1, RSP next, io)
--- 
--- -- and-nop1
--- step Nothing eid (RSP (Free (And (RSP (Pure a)) q next)))
---   = (Nothing, eid + 1, q' a, pure ())
---   where
---    q' a = do
---      b <- q
---      RSP (next [a, b])
--- -- and-nop2
--- step Nothing eid (RSP (Free (And p (RSP (Pure b)) next)))
---   | isBlocked p = (Nothing, eid + 1, p' b, pure ())
---   where
---     p' b = do
---       a <- p
---       RSP (next [a, b])
--- -- and-adv2
--- step Nothing eid (RSP (Free (And p q next)))
---   | isBlocked p = (e, eid', RSP (Free (And p q' next)), io)
---   where
---     (e, eid', q', io) = step Nothing eid q
--- -- and-adv1
--- step Nothing eid (RSP (Free (And p q next)))
---   = (e, eid', RSP (Free (And p' q next)), io)
---   where
---     (e, eid', p', io) = step Nothing eid p
--- 
--- -- or-nop1
--- step Nothing eid (RSP (Free (Or (RSP (Pure a)) q next)))
---   = (Nothing, eid + 1, RSP (next (a, q)), pure ())
--- -- or-nop2
--- step Nothing eid (RSP (Free (Or p (RSP (Pure b)) next)))
---   = (Nothing, eid + 1, RSP (next (b, p)), pure ())
--- -- or-adv2
--- step Nothing eid (RSP (Free (Or p q next)))
---   | isBlocked p = (e, eid', RSP (Free (Or p q' next)), io)
---   where
---     (e, eid', q', io) = step Nothing eid q
--- -- or-adv1
--- step Nothing eid (RSP (Free (Or p q next)))
---   = (e, eid', RSP (Free (Or p' q next)), io)
---   where
---     (e, eid', p', io) = step Nothing eid p
--- 
--- step e eid p = error (isEvent e <> ", " <> show eid <> ", " <> show p)
---   where
---     isEvent (Just _) = "Event"
---     isEvent Nothing  = "No event"
-
 --------------------------------------------------------------------------------
 
 run :: RSP a -> IO a
-run = go M.empty 0
+run = go 0
   where
-    go em 100 p = error "END"
-    -- go em eid p = do
-    --   traceIO ("*** " <> show p)
-    --   let (em', eid', ios, p', _) = step em M.empty eid [] p
-    --   traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys em'))
-    --   sequence_ ios
-    --   case p' of
-    --     RSP (Pure a) -> pure a
-    --     _ -> if isBlocked p' && M.size em' == 0
-    --       then error "Blocked"
-    --       else go em' eid' p'
+    go 100 p = error "END"
+    go eid p = do
+      -- traceIO ("*** " <> show p)
+      let (m, eid', ios, p') = gather M.empty eid [] p
+          p'' = unblock m p'
+      -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys em'))
+      sequence_ ios
+      case p'' of
+        RSP (Pure a) -> pure a
+        _ -> go eid' p''
 
 -- Pools -----------------------------------------------------------------------
 
@@ -528,10 +410,10 @@ pool f = local $ \e -> go e
   (singletonO (Left <$> f (Pool e)) `appendO` singletonO (Right . Left <$> await e))
   where
     go e k = do
-      async (traceIO "BEFORE")
+      -- async (traceIO "BEFORE")
       (r, k') <- advO k
 
-      async (traceIO $ show (r, k'))
+      -- async (traceIO $ show (r, k'))
 
       case r of
         Left a -> pure a
