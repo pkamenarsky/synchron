@@ -9,8 +9,16 @@ p1 = run $ local $ \e -> do
   pure (a, b)
 
 p2 = run $ local $ \e -> do
-  a <- andd [ Left <$> emit e "E", Right <$> await e ]
-  pure a
+  andd [ Left <$> emit e "E", Right <$> await e ]
+
+p2_2 = run $ local $ \e -> do
+  andd [ Left <$> (emit e "E" >> emit e "F"), Right <$> ((,) <$> await e <*> await e) ]
+
+p2_3 = run $ local $ \e -> local $ \f -> do
+  andd [ Left <$> (andd [ await e, await f ]), Right <$> orr [ emit e 5, emit f 6 ] ]
+
+p2_4 = run $ local $ \e -> local $ \f -> do
+  andd [ Left <$> (orr [ await e, await f ]), Right <$> orr [ emit e 5, emit f 6 ] ]
 
 p3 = run $ local $ \e -> local $ \f -> do
   a <- andd
@@ -76,7 +84,7 @@ p8 = run $ pool $ \p -> local $ \e -> do
 
   pure (a + b)
 
-p9_1 = run $ local $ \e -> pool $ \p -> do
+p9 = run $ local $ \e -> pool $ \p -> do
   spawn p (emit e 5)
   a <- await e
 
@@ -118,13 +126,16 @@ main :: IO ()
 main = defaultMain $ testGroup "Unit tests"
   [ testCase "p1" $ test p1 ([Left "A",Right (),Right ()],Left "B")
   , testCase "p2" $ test p2 [Left (),Right "E"]
+  , testCase "p2_2" $ test p2_2 [Left (),Right ("E","F")]
+  , testCase "p2_3" $ test p2_3 [Left [5,6],Right ()]
+  , testCase "p2_4" $ test p2_4 [Left 5,Right ()]
   , testCase "p3" $ test p3 [Left (),Right "F",Left ()]
   , testCase "p4" $ test p4 [Left [Left "E",Right ()],Right "F",Left [Left "_",Right ()]]
   , testCase "p5" $ test p5 [Left 0,Right ()]
   , testCase "p6" $ test p6 [Left [Left "E",Right ()],Right ["F","G","E"],Right ["E","G","F"],Left [Left "_",Right ()]]
   , testCase "p7" $ test p7 [Left 20,Right ()]
   , testCase "p8" $ test p8 10
-  , testCase "p9_1" $ test p9_1 18
+  , testCase "p9" $ test p9 18
   , testCase "p9_2" $ test p9_2 18
   , testCase "p10" $ test p10 [Left 6,Right ()]
   ]

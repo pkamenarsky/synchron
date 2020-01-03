@@ -44,9 +44,6 @@ data ExEvent = forall a. ExEvent (Event a) a
 instance Show ExEvent where
   show (ExEvent e _) = show e
 
-newtype StackLevel = StackLevel { getStackLevel :: Int }
-  deriving (Eq, Ord, Num, Show)
-
 data RSPF next
   = Async (IO ()) next
 
@@ -58,10 +55,6 @@ data RSPF next
 
   | forall a. Or (RSP a) (RSP a) ((a, RSP a) -> next)
   | forall a. And (RSP a) (RSP a) ([a] -> next)
-
-  | Hole next
-  | HoleNext next
-  | forall a. Tag String (RSP a)
 
 deriving instance Functor RSPF
 
@@ -82,9 +75,6 @@ instance Show (RSP a) where
   show (RSP (Free (Await _ _)))  = "Await"
   show (RSP (Free (Or a b _)))   = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
   show (RSP (Free (And a b _)))  = "And [" <> intercalate ", " (map show [a, b]) <> "]"
-  show (RSP (Free (Tag s p))) = "<" <> s <> "> " <> show p
-  show (RSP (Free (Hole _))) = "Hole"
-  show (RSP (Free (HoleNext _))) = "HoleNext"
 
 async :: IO () -> RSP ()
 async io = RSP $ liftF (Async io ())
@@ -106,37 +96,23 @@ emit e a = RSP $ liftF (Emit (ExEvent e a) ())
 await :: Event a -> RSP a
 await e = RSP $ liftF (Await e id)
 
-hole :: RSP ()
-hole = RSP $ liftF (Hole ())
-
-tag :: String -> RSP a -> RSP a
-tag s p = RSP $ liftF (Tag s p)
-
-data O a = O { advO :: RSP (a, O a) } | D
+data Orr a = Orr { runOrr :: RSP (a, Orr a) } | D
   deriving Show
 
-emptyO :: O a
-emptyO = D
+instance Semigroup (Orr a) where
+  D <> q = q
+  p <> D = p
+  Orr p <> Orr q = Orr $ do
+    ((a, m), n) <- RSP (liftF (Or p q id))
+    pure (a, m <> Orr n)
 
-singletonO :: RSP a -> O a
-singletonO p = O $ do
+instance Monoid (Orr a) where
+  mempty = D
+
+singletonOrr :: RSP a -> Orr a
+singletonOrr p = Orr $ do
   a <- p
   pure (a, D)
-
-appendO :: O a -> O a -> O a
-appendO D q = q
-appendO p D = p
-appendO (O p) (O q) = O $ do
-  ((a, m), n) <- RSP (liftF (Or p q id))
-  pure (a, m `appendO` O n)
-
-orO :: RSP a -> O a -> O a
-orO p D = O $ do
-  r <- p
-  pure (r, D)
-orP p (O q) = O $ do
-  ((a, k), u) <- RSP (liftF (Or p q id))
-  undefined
 
 orr' :: Show a => [RSP a] -> RSP (a, [RSP a])
 orr' [a] = trace ("ORR1: " <> show a) ((,[]) <$> a)
@@ -204,23 +180,12 @@ andd [a] = (:[]) <$> a
 andd [a, b] = RSP $ liftF (And a b id)
 andd (a:as) = concat <$> andd [(:[]) <$> a, andd as]
 
-testorr = run $ local $ \e -> local $ \f -> local $ \g -> do
-  [_, Right (b, ks)] <- andd [ Left <$> (await e), Right <$> (orr' (ks e f g)) ]
-  async (traceIO $ "KS1: " <> show (b, ks))
-  [_, Right (b, ks)] <- andd [ Left <$> (await f >> await f), Right <$> (orr' ks) ]
-  async (traceIO $ "KS2: " <> show (b, ks))
-  [a, Right (b, ks)] <- andd [ Left <$> (await g >> await g >> await g), Right <$> (orr' ks) ]
-  async (traceIO $ "KS3: " <> show (b, ks))
-  pure a
-  where
-    ks e f g = [ emit e () >> pure 1, emit f () >> emit f () >> pure 2, emit g () >> emit g () >> emit g () >> pure 3 ]
-
 testorr' = run $ local $ \e -> local $ \f -> local $ \g -> do
-  [_, Right (b, ks)] <- andd [ Left <$> (await e), Right <$> (advO (ks e f g)) ]
+  [_, Right (b, ks)] <- andd [ Left <$> ((,,) <$> await e <*> await f <*> await g), Right <$> (advO (ks e f g)) ]
   async (traceIO $ "KS1: " <> show (b, ks))
-  [_, Right (b, ks)] <- andd [ Left <$> (await f >> await f), Right <$> (advO ks) ]
+  [_, Right (b, ks)] <- andd [ Left <$> ((,) <$> await f <*> await g), Right <$> (advO ks) ]
   async (traceIO $ "KS2: " <> show (b, ks))
-  [a, Right (b, ks)] <- andd [ Left <$> (await g >> await g >> await g), Right <$> (advO ks) ]
+  [a, Right (b, ks)] <- andd [ Left <$> (await g), Right <$> (advO ks) ]
   async (traceIO $ "KS3: " <> show (b, ks))
   pure a
   where
@@ -364,32 +329,12 @@ run = go 0
 
 data Pool = Pool (Event (RSP ()))
 
-pool' :: Show a => (Pool -> RSP a) -> RSP a
-pool' f = local (\e -> go e [Left <$> f (Pool e), Right . Left <$> await e])
-  where
-    go e ks = do
-      (r, ks') <- orr' ks
-
-      async $ traceIO ("POOL BEFORE: " <> show ks)
-      async $ traceIO ("POOL AFTER : " <> show (r, ks'))
-      
-      case r of
-        Left a          -> pure a
-        Right (Left p)  -> go e $ concat
-          [ [ Right . Left <$> await e ]
-          , fmap (Right . Right) p:ks'
-          ]
-        Right (Right _) -> go e ks'
-
 pool :: Show a => (Pool -> RSP a) -> RSP a
 pool f = local $ \e -> go e
   (singletonO (Left <$> f (Pool e)) `appendO` singletonO (Right . Left <$> await e))
   where
     go e k = do
-      -- async (traceIO "BEFORE")
       (r, k') <- advO k
-
-      -- async (traceIO $ show (r, k'))
 
       case r of
         Left a -> pure a
