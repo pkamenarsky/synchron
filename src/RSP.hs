@@ -105,8 +105,8 @@ data Context a = Context (MVar (RSP a))
 runRSP :: RSP a -> IO (Context a)
 runRSP = undefined
 
-global :: (Event b -> (b -> IO ()) -> IO ()) -> IO ()
-global = undefined
+global :: (Event b -> (b -> IO (Maybe a)) -> Context a) -> Context a
+global f = undefined
 
 --------------------------------------------------------------------------------
 
