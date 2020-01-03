@@ -1,3 +1,5 @@
+import Data.Maybe (fromJust)
+
 import Test.Tasty
 import Test.Tasty.HUnit
 
@@ -117,6 +119,16 @@ p10 = run $ local $ \i -> local $ \o -> pool $ \p -> do
       a <- await i
       go i o (x + a) (n - 1)
 
+p11 = run $ do
+  (a, ks) <- fromJust $ runOrr $ mconcat
+    [ singletonOrr (pure "a")
+    , singletonOrr (pure "b")
+    , singletonOrr (pure "c")
+    ]
+  (b, ks') <- fromJust $ runOrr ks
+  (c, ks'') <- fromJust $ runOrr ks'
+  pure (a, b, c)
+
 --------------------------------------------------------------------------------
 
 test :: (Show a, Eq a) => IO a -> a -> Assertion
@@ -138,4 +150,5 @@ main = defaultMain $ testGroup "Unit tests"
   , testCase "p9" $ test p9 18
   , testCase "p9_2" $ test p9_2 18
   , testCase "p10" $ test p10 [Left 6,Right ()]
+  , testCase "p11" $ test p11 ("a","b","c")
   ]

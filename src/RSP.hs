@@ -1,24 +1,16 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TupleSections #-}
 
 module RSP where
 
-import Control.Concurrent
 import Control.Monad.Fail
 import Control.Monad.Free
-import Control.Monad.IO.Class
-import qualified Control.Monad.Trans.State as ST
-import qualified Control.Lens as L
 
-import Data.Bifunctor (first, second)
 import Data.IORef
 import Data.List (intercalate)
-import Data.Maybe (isJust, isNothing, listToMaybe, mapMaybe)
+import Data.Maybe (fromJust, isJust, isNothing, listToMaybe, mapMaybe)
 import qualified Data.Map as M
 
 import Unsafe.Coerce (unsafeCoerce)
@@ -96,8 +88,24 @@ emit e a = RSP $ liftF (Emit (ExEvent e a) ())
 await :: Event a -> RSP a
 await e = RSP $ liftF (Await e id)
 
-data Orr a = Orr { runOrr :: RSP (a, Orr a) } | D
+orr :: [RSP a] -> RSP a
+orr [a] = a
+orr [a, b] = fmap fst $ RSP $ liftF (Or a b id)
+orr (a:as) = orr [a, orr as]
+
+andd :: [RSP a] -> RSP [a]
+andd [a] = (:[]) <$> a
+andd [a, b] = RSP $ liftF (And a b id)
+andd (a:as) = concat <$> andd [(:[]) <$> a, andd as]
+
+--------------------------------------------------------------------------------
+
+data Orr a = Orr (RSP (a, Orr a)) | D
   deriving Show
+
+runOrr :: Orr a -> Maybe (RSP (a, Orr a))
+runOrr (Orr o) = Just o
+runOrr D = Nothing
 
 instance Semigroup (Orr a) where
   D <> q = q
@@ -113,86 +121,6 @@ singletonOrr :: RSP a -> Orr a
 singletonOrr p = Orr $ do
   a <- p
   pure (a, D)
-
-orr' :: Show a => [RSP a] -> RSP (a, [RSP a])
-orr' [a] = trace ("ORR1: " <> show a) ((,[]) <$> a)
-orr' [a, b] = do
-  (a, k) <- RSP (liftF (Or a b id))
-  pure $ trace ("ORR2: " <> show (a, [k])) (a, [k])
-orr' [a, b] = second (:[]) <$> RSP (liftF (Or a b id))
-orr' (a:as) = do
-  (x, ks) <- orr' [ Left <$> a, Right <$> orr' as ]
-  -- :: RSP (Either a (a, [RSP a]), [RSP (Either a (a, [RSP a]))])
-
-  -- Left ends  :: (a, [(a, [RSP a])])
-  -- Right ends :: ((a, [RSP a]), [RSP a])
-
-  let i = ("ORR3: " <> show (orr' [ Left <$> a, Right <$> orr' as ]) <> ", X: " <> show (x, ks))
-  case x of
-    Left b -> trace (i <> ", R: " <> show (b, [r ks]))
-      $ pure (b, [r ks])
-    Right (b, bs) -> trace (i <> ", R: " <> show (b, fmap l ks <> bs))
-      $ pure (b, fmap l ks <> bs)
-  where
-    r :: [RSP (Either a (a, [RSP a]))] -> RSP a
-    r [p] = do
-      r <- p
-      case r of
-        Right (a, ks) -> pure a
-
-    l :: RSP (Either a (a, [RSP a])) -> RSP a
-    l p = do
-      r <- p
-      case r of
-        Left a -> pure a
-
-data M a = M (RSP a, M a) | MD
-
-orr'' :: RSP a -> RSP a -> RSP a -> RSP (a, [RSP a])
-orr'' a b c = do
-  (x, ks) <- orr_ (Left <$> a) (Right <$> orr_ b c)
-  -- :: RSP (Either a (a, RSP a), RSP (Either a (a, RSP a)))
-
-  -- Left ends  :: (a, RSP (a, RSP a)) -?-> RSP (a, [RSP a])
-  -- Right ends :: ((a, RSP a), RSP a) -?-> RSP (a, [RSP a])
-
-  case x of
-    Left a -> undefined
-    Right (a, ks') -> undefined
-  where
-    f :: RSP (Either a (a, RSP a)) -> RSP a
-    f p = do
-      r <- p
-      case r of
-        Left a -> error "f"
-        Right (a, ks) -> undefined
-
-orr_ :: RSP a -> RSP a -> RSP (a, RSP a)
-orr_ = undefined
-
-orr :: [RSP a] -> RSP a
-orr [a] = a
-orr [a, b] = fmap fst $ RSP $ liftF (Or a b id)
-orr (a:as) = orr [a, orr as]
-
-andd :: [RSP a] -> RSP [a]
-andd [a] = (:[]) <$> a
-andd [a, b] = RSP $ liftF (And a b id)
-andd (a:as) = concat <$> andd [(:[]) <$> a, andd as]
-
-testorr' = run $ local $ \e -> local $ \f -> local $ \g -> do
-  [_, Right (b, ks)] <- andd [ Left <$> ((,,) <$> await e <*> await f <*> await g), Right <$> (advO (ks e f g)) ]
-  async (traceIO $ "KS1: " <> show (b, ks))
-  [_, Right (b, ks)] <- andd [ Left <$> ((,) <$> await f <*> await g), Right <$> (advO ks) ]
-  async (traceIO $ "KS2: " <> show (b, ks))
-  [a, Right (b, ks)] <- andd [ Left <$> (await g), Right <$> (advO ks) ]
-  async (traceIO $ "KS3: " <> show (b, ks))
-  pure a
-  where
-    ks e f g
-      = singletonO (emit e () >> pure 1) `appendO`
-        singletonO (emit f () >> emit f () >> pure 2) `appendO`
-        singletonO (emit g () >> emit g () >> emit g () >> pure 3)
 
 --------------------------------------------------------------------------------
 
@@ -311,7 +239,6 @@ gather (RSP (Free (Or p q next))) = gather p <> gather q
 run :: RSP a -> IO a
 run = go 0
   where
-    go 100 p = error "END"
     go eid p = do
       -- traceIO ("*** " <> show p)
       let (eid', ios, p') = advance eid [] p
@@ -330,21 +257,21 @@ run = go 0
 data Pool = Pool (Event (RSP ()))
 
 pool :: Show a => (Pool -> RSP a) -> RSP a
-pool f = local $ \e -> go e
-  (singletonO (Left <$> f (Pool e)) `appendO` singletonO (Right . Left <$> await e))
+pool f = local $ \e -> go e $ mconcat
+  [ singletonOrr (Right . Left <$> await e)
+  , singletonOrr (Left <$> f (Pool e))
+  ]
   where
     go e k = do
-      (r, k') <- advO k
+      (r, k') <- fromJust (runOrr k)
 
       case r of
         Left a -> pure a
-        Right (Left p)  -> go e
-          ( (singletonO (Right . Left <$> await e))
-            `appendO`
-            (singletonO (fmap (Right . Right) p))
-            `appendO`
-            k'
-          )
+        Right (Left p)  -> go e $ mconcat
+          [ singletonOrr (Right . Left <$> await e)
+          , singletonOrr (fmap (Right . Right) p)
+          , k'
+          ]
         Right (Right _) -> go e k'
 
 spawn :: Pool -> RSP () -> RSP ()
