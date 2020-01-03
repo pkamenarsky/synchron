@@ -300,7 +300,7 @@ step em m eid ios (RSP (Free (Async io next)))
 -- and
 step em m eid ios rsp@(RSP (Free (And p q next)))
   = case (p', q') of
-      (RSP (Pure a), RSP (Pure b)) -> if False -- if pc || qc
+      (RSP (Pure a), RSP (Pure b)) -> if pc || qc
         then (m'', eid'', ios'', RSP (next [a, b]), pc || qc)
         else step em m'' eid'' ios'' (RSP (next [a, b]))
       _ -> (m'', eid'', ios'', RSP (Free (And p' q' next)), pc || qc)
@@ -309,19 +309,91 @@ step em m eid ios rsp@(RSP (Free (And p q next)))
     (m'', eid'', ios'', q', qc) = step em m' (eid' + 1) ios' q
 
 -- or
--- TODO: remove pc, qc etc, just remove event from `em` on `await`
 step em m eid ios rsp@(RSP (Free (Or p q next)))
   = case (p', q') of
-      (RSP (Pure a), _) -> if False -- if pc
+      (RSP (Pure a), _) -> if pc
         then (m', eid', ios', RSP (next (a, q')), pc)
         else step em m' eid' ios' (RSP (next (a, q')))
-      (_, RSP (Pure b)) -> if False -- if pc || qc
+      (_, RSP (Pure b)) -> if pc || qc
         then (m'', eid'', ios'', RSP (next (b, p')), pc || qc)
         else step em m'' eid'' ios'' (RSP (next (b, p')))
       _ -> (m'', eid'', ios'', RSP (Free (Or p' q' next)), pc || qc)
   where
     (m', eid', ios', p', pc) = step em m (eid + 1) ios p
     (m'', eid'', ios'', q', qc) = step em m' (eid' + 1) ios' q
+
+gather
+  :: M.Map EventId ExEvent
+  -> M.Map EventId ExEvent
+  -> EventIdInt
+  -> [IO ()]
+  -> RSP a
+  -> (M.Map EventId ExEvent, EventIdInt, [IO ()], RSP a, Bool)
+
+-- pure
+gather em m eid ios rsp@(RSP (Pure a))
+  = (m, eid, ios, rsp, False)
+
+-- local
+gather em m eid ios (RSP (Free (Local f next)))
+  = gather em m (eid + 1) ios (f (Event (I eid)) >>= RSP . next)
+
+-- emit
+gather em m eid ios (RSP (Free (Emit e@(ExEvent (Event eid') _) next)))
+  = gather em (M.insert eid' e m) (eid + 1) ios (RSP next)
+
+-- await
+gather em m eid ios rsp@(RSP (Free (Await (Event eid') next)))
+  = ( m
+    , eid
+    , ios
+    , case M.lookup eid' em of
+        Just (ExEvent _ a) -> RSP (next $ unsafeCoerce a)
+        Nothing -> rsp
+    , True
+    )
+
+-- hole
+gather em m eid ios (RSP (Free (Hole next)))
+  = ( m
+    , eid
+    , ios
+    , RSP (Free (HoleNext next))
+    , True
+    )
+
+-- hole
+gather em m eid ios (RSP (Free (HoleNext next)))
+  = gather em m eid ios (RSP next)
+
+-- async
+gather em m eid ios (RSP (Free (Async io next)))
+  = gather em m (eid + 1) (io:ios) (RSP next)
+
+-- and
+gather em m eid ios rsp@(RSP (Free (And p q next)))
+  = case (p', q') of
+      (RSP (Pure a), RSP (Pure b)) -> if pc || qc
+        then (m'', eid'', ios'', RSP (next [a, b]), pc || qc)
+        else gather em m'' eid'' ios'' (RSP (next [a, b]))
+      _ -> (m'', eid'', ios'', RSP (Free (And p' q' next)), pc || qc)
+  where
+    (m', eid', ios', p', pc) = gather em m (eid + 1) ios p
+    (m'', eid'', ios'', q', qc) = gather em m' (eid' + 1) ios' q
+
+-- or
+gather em m eid ios rsp@(RSP (Free (Or p q next)))
+  = case (p', q') of
+      (RSP (Pure a), _) -> if pc
+        then (m', eid', ios', RSP (next (a, q')), pc)
+        else gather em m' eid' ios' (RSP (next (a, q')))
+      (_, RSP (Pure b)) -> if pc || qc
+        then (m'', eid'', ios'', RSP (next (b, p')), pc || qc)
+        else gather em m'' eid'' ios'' (RSP (next (b, p')))
+      _ -> (m'', eid'', ios'', RSP (Free (Or p' q' next)), pc || qc)
+  where
+    (m', eid', ios', p', pc) = gather em m (eid + 1) ios p
+    (m'', eid'', ios'', q', qc) = gather em m' (eid' + 1) ios' q
 
 -- step
 --   :: Maybe ExEvent
