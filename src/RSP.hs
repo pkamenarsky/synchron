@@ -234,38 +234,41 @@ testorr' = run $ local $ \e -> local $ \f -> local $ \g -> do
 unblock
   :: M.Map EventId ExEvent
   -> RSP a
-  -> RSP a
+  -> (RSP a, Bool)
 
 -- pure
-unblock _ rsp@(RSP (Pure a)) = rsp
+unblock _ rsp@(RSP (Pure a)) = (rsp, False)
 
 -- await
 unblock m rsp@(RSP (Free (Await (Event eid') next)))
   = case M.lookup eid' m of
-      Just (ExEvent _ a) -> RSP (next $ unsafeCoerce a)
-      Nothing -> rsp
+      Just (ExEvent _ a) -> (RSP (next $ unsafeCoerce a), True)
+      Nothing -> (rsp, False)
+
+-- emit
+unblock m rsp@(RSP (Free (Emit _ _))) = (rsp, False)
 
 -- and
 unblock m rsp@(RSP (Free (And p q next)))
   = case (p', q') of
       (RSP (Pure a), RSP (Pure b))
-        -> RSP (next [a, b])
-      _ -> RSP (Free (And p' q' next))
+        -> (RSP (next [a, b]), True)
+      _ -> (RSP (Free (And p' q' next)), up || uq)
   where
-    p' = unblock m p
-    q' = unblock m q
+    (p', up) = unblock m p
+    (q', uq) = unblock m q
 
 -- or
 unblock m rsp@(RSP (Free (Or p q next)))
   = case (p', q') of
       (RSP (Pure a), _)
-        -> RSP (next (a, q'))
+        -> (RSP (next (a, q')), True)
       (_, RSP (Pure b))
-        -> RSP (next (b, p'))
-      _ -> RSP (Free (Or p' q' next))
+        -> (RSP (next (b, p')), True)
+      _ -> (RSP (Free (Or p' q' next)), up || uq)
   where
-    p' = unblock m p
-    q' = unblock m q
+    (p', up) = unblock m p
+    (q', uq) = unblock m q
 
 --------------------------------------------------------------------------------
 
@@ -320,53 +323,23 @@ advance eid ios rsp@(RSP (Free (Or p q next)))
 --------------------------------------------------------------------------------
 
 gather
-  :: M.Map EventId ExEvent
-  -> EventIdInt
-  -> [IO ()]
-  -> RSP a
-  -> (M.Map EventId ExEvent, EventIdInt, [IO ()], RSP a)
+  :: RSP a
+  -> M.Map EventId ExEvent
 
 -- pure
-gather m eid ios rsp@(RSP (Pure a))
-  = (m, eid, ios, rsp)
+gather (RSP (Pure _)) = M.empty
 
 -- await
-gather m eid ios rsp@(RSP (Free (Await _ _)))
-  = (m, eid, ios, rsp)
-
--- local
-gather m eid ios (RSP (Free (Local f next)))
-  = gather m (eid + 1) ios (f (Event (I eid)) >>= RSP . next)
+gather (RSP (Free (Await _ _))) = M.empty
 
 -- emit
-gather m eid ios (RSP (Free (Emit e@(ExEvent (Event ei) _) next)))
-  = gather (M.insert ei e m) (eid + 1) ios (RSP next)
-
--- async
-gather m eid ios (RSP (Free (Async io next)))
-  = gather m (eid + 1) (io:ios) (RSP next)
+gather (RSP (Free (Emit e@(ExEvent (Event ei) _) next))) = M.singleton ei e
 
 -- and
-gather m eid ios rsp@(RSP (Free (And p q next)))
-  = case (p', q') of
-      (RSP (Pure a), RSP (Pure b))
-        -> gather m'' eid'' ios'' (RSP (next [a, b]))
-      _ -> (m'', eid'', ios'', RSP (Free (And p' q' next)))
-  where
-    (m', eid', ios', p') = gather m (eid + 1) ios p
-    (m'', eid'', ios'', q') = gather m' (eid' + 1) ios' q
+gather (RSP (Free (And p q next))) = gather p <> gather q
 
 -- or
-gather m eid ios rsp@(RSP (Free (Or p q next)))
-  = case (p', q') of
-      (RSP (Pure a), _)
-        -> gather m' eid' ios' (RSP (next (a, q')))
-      (_, RSP (Pure b))
-        -> gather m'' eid'' ios'' (RSP (next (b, p')))
-      _ -> (m'', eid'', ios'', RSP (Free (Or p' q' next)))
-  where
-    (m', eid', ios', p') = gather m (eid + 1) ios p
-    (m'', eid'', ios'', q') = gather m' (eid' + 1) ios' q
+gather (RSP (Free (Or p q next))) = gather p <> gather q
 
 --------------------------------------------------------------------------------
 
@@ -375,14 +348,17 @@ run = go 0
   where
     go 100 p = error "END"
     go eid p = do
-      -- traceIO ("*** " <> show p)
-      let (m, eid', ios, p') = gather M.empty eid [] p
-          p'' = unblock m p'
-      -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys em'))
+      traceIO ("*** " <> show p)
+      let (eid', ios, p') = advance eid [] p
+          m = gather p'
+          (p'', u) = unblock m p'
+      traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m))
       sequence_ ios
       case p'' of
         RSP (Pure a) -> pure a
-        _ -> go eid' p''
+        _ -> if u
+          then go eid' p''
+          else error "Blocked"
 
 -- Pools -----------------------------------------------------------------------
 
