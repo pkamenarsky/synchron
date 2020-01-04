@@ -4,7 +4,7 @@
 
 **Synchron** is inspired by **Céu**<sup id="a2">[2](#f2)</sup> and **Concur**<sup id="a3">[3](#f3)</sup> and is meant as an exploration of the synchronous paradigm in Haskell; it is by no means an efficient implementation and so far lacks a formal specification or operational semantics.
 
-# Example
+## Example
 
 ```
 example :: Syn Int
@@ -20,17 +20,17 @@ example = local $ \e -> do              ➊
 
 `andd` is overloaded for tuples of arity up to 6, yielding tuples of the same arity in the `Syn` monad. This allows for trails with differing types, in contrast to `orr` (alternatively, `andd'` takes a monomorphic list if that is desired).
 
-# TODO Talk about state machine in data vs code; "reification of time"; "reinversion of control"
+*TODO* Talk about state machine in data vs code; "reification of time"; "reinversion of control"
 
-# External events
+*TODO* External events
 
-# Connectors
+*TODO* Connectors
 
-# Low level details
+## Low level details
 
 This section explains some low level technicalities of **Synchron** and can be skipped safely.
 
-## Problems with Céu
+### Problems with Céu
 
 From *The Céu Manual* (v0.30, p. 3):
 
@@ -50,7 +50,7 @@ local $ \e -> andd (emit e 5, await e)
 
 are **not** equivalent. Due to **Céu**'s operational semantics, the former will terminate, as expected, while the latter will block forever on `await e`. In the context of Haskell this seems unintuitive and non-compositional: a trail definition, which might come from a completely different module or package, must be aware of (or alternatively, specify) the execution order in parallel statetements to ensure correctness.
 
-## Informal semantics
+### Informal semantics
 
 To combat this problem, **Synchron** takes a different route. Program execution is divided into three distinct phases:
 
@@ -60,10 +60,11 @@ To combat this problem, **Synchron** takes a different route. Program execution 
 
 The *advance - gather - unblock* phases are repeated in that order until the *unblock* phase can not advance the program further (at which point the program is either finished or blocked).
 
-# References
+## References
 
 <span id="f1">[1]</span> [The Céu Manual v0.30](https://github.com/ceu-lang/ceu/blob/master/docs/manual/v0.30/ceu-v0.30.pdf)
 
 <span id="f2">[2]</span> [The Programming Language Céu](http://www.ceu-lang.org)
 
 <span id="f3">[3]</span> [Concur - An unusual Web UI Framework](https://github.com/ajnsit/concur)
+
