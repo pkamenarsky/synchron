@@ -22,6 +22,10 @@ example = local $ \e -> do              ➊
 
 *TODO* Talk about state machine in data vs code; "reification of time"; "reinversion of control"
 
+*TODO* Talk about interesting and unexplored applications of syncrhronous programming
+
+*TODO* Contrast with FRP
+
 *TODO* External events
 
 *TODO* Connectors
