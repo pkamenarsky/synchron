@@ -1,8 +1,12 @@
 # Synchron
 
-**Synchron** is a synchronous programming DSL for Haskell. *Synchronous reactive concurrent programming* allows for running multiple *trails* simultaneously at logical time steps in reaction to external or internal *events*. The execution model, contrary to actor based or multithreaded models, is deterministic and does not require synchronisation primitives<sup id="a1">[1](#f1)</sup>.
+**Synchron** is a *synchronous reactive concurrent programming* DSL for Haskell. Synchronous programming allows for running multiple *trails* simultaneously at logical time steps in reaction to external or internal *events*. The execution model, contrary to actor based or multithreaded models, is deterministic and does not require synchronisation primitives<sup id="a1">[1](#f1)</sup>.
 
-**Synchron** is inspired by **Céu**<sup id="a2">[2](#f2)</sup> and **Concur**<sup id="a3">[3](#f3)</sup> and is meant as an exploration of the synchronous paradigm in Haskell; it is by no means an efficient implementation and so far lacks a formal specification or operational semantics.
+**Synchron** is inspired by (**Céu**)[http://www.ceu-lang.org] and (**Concur**)[https://github.com/ajnsit/concur] and is meant as an exploration of the synchronous paradigm in Haskell; it is by no means an efficient implementation and so far lacks a formal specification or operational semantics.
+
+Especially (**Concur**)[https://github.com/ajnsit/concur] has shown that the synchronous programming paradigm need not stay confined to the embedded or hard real time domain, as it seemingly has so far -- indeed, it lends itself extraordinarily well to programming UIs consisting of complex workflows and user interactions. So much so, that it's arguably one of the most interesting advancements in UI programming since Elm/React.
+
+**Synchron** takes a step back and explores another domain -- that of complex network protocols or data processing pipelines. In contrast to e.g. FRP or the observer pattern, synchronous programming reifies the program's state machine implicitly in the program flow, as opposed to advancing execution through short lived, disconnected callbacks. Callbacks "eliminate any vestige of structured programming, such as support for long-lasting loops and automatic variables [and thus] actually disrupt imperative reactivity, becoming 'our generation's goto'"<sup id="a2">[2](#f2)</sup>.
 
 ## Example
 
@@ -52,7 +56,7 @@ and
 local $ \e -> andd (emit e 5, await e)
 ```
 
-are **not** equivalent. Due to **Céu**'s operational semantics, the former will terminate, as expected, while the latter will block forever on `await e`. In the context of Haskell this seems unintuitive and non-compositional: a trail definition, which might come from a completely different module or package, must be aware of (or alternatively, specify) the execution order in parallel statetements to ensure correctness.
+are **not** equivalent. Due to **Céu**'s operational semantics, the former will terminate, as expected, while the latter will block forever on `await e`. In the context of Haskell this seems unintuitive and non-compositional: a trail definition, which might come from a completely different module or package, must be aware of (or alternatively, specify) the execution order in parallel statements to ensure correctness.
 
 ### Informal semantics
 
@@ -62,13 +66,10 @@ To combat this problem, **Synchron** takes a different route. Program execution 
 * *Gather* - gather all events and values from all current `emit` statements and combine with all currently firing external events. Don't advance the program further.
 * *Unblock* - unblock all `await` statements affected by the firing events gathered in the previous phase. Advance all `emit` statements. Advance `orr` if at least one of its trails has finished. Advance `andd` if and only if all of its trails have finished.
 
-The *advance - gather - unblock* phases are repeated in that order until the *unblock* phase can not advance the program further (at which point the program has either finished or is blocked).
+The *advance - gather - unblock* phases are repeated in that order until the *unblock* phase can not advance the program further (at which point the program has either finished or is blocked). Although not formally proven, this execution model seems to facilitate trail order invariance in `andd` while remaining deterministic and reproducible.
 
 ## References
 
 <span id="f1">[1]</span> [The Céu Manual v0.30](https://github.com/ceu-lang/ceu/blob/master/docs/manual/v0.30/ceu-v0.30.pdf)
 
-<span id="f2">[2]</span> [The Programming Language Céu](http://www.ceu-lang.org)
-
-<span id="f3">[3]</span> [Concur - An unusual Web UI Framework](https://github.com/ajnsit/concur)
-
+<span id="f2">[2]</span> F. Sant’Anna et al. [Structured Synchronous Reactive Programming with Céu](http://www.ceu-lang.org/chico/ceu_mod15_pre.pdf)
