@@ -14,7 +14,13 @@ example = local $ \e -> do              ➊
   pure (a + b)
 ```
 
-`local` (➊) creates a new *internal* event (the difference between external and internal events will become clearer later). The `andd` (➋) combinator starts the execution of *both* trails (`emit e 5` and `await e`) *simultaneously* and continues only when *both* are finished -- `emit` fires the specified event with the given value, while `await` blocks until a given event fires.
+`local` (➊) creates a new *internal* event (the difference between external and internal events will become clearer later). The `andd` (➋) combinator forks the execution and starts *both* trails (`emit e 5` and `await e`) *simultaneously* and only continues with the next line (➌) when *all* trails are finished.
+
+`emit` fires the specified event with the given value, while `await` blocks until a given event fires.
+
+`andd` is overloaded for tuples of arity up to 6, yielding tuples of the same arity in the `Syn` monad. This allows for trails with differing types, in contrast to `orr` (alternatively, `andd'` takes a monomorphic list if that is desired).
+
+# TODO Talk about state machine in data vs code; "reification of time"; "reinversion of control"
 
 # Problems with Ceu
 
