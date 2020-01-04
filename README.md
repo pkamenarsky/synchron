@@ -36,7 +36,7 @@ From *The Céu Manual* (v0.30, p. 3):
 
 > When multiple trails are active at a logical time (i.e. awaking from the same event), Céu schedules them in the order they appear in the program text. This policy is arbitrary, but provides a priority scheme for trails, and also ensures deterministic and reproducible execution for programs.
 
-In practice this means that the programs
+In practice, this means that the programs
 
 ```
 local $ \e -> andd (await e, emit e 5)
@@ -52,15 +52,13 @@ are **not** equivalent. Due to **Céu**'s operational semantics, the former wil
 
 ## Informal semantics
 
-To combat this problem, **Synchron** takes another route. Program execution is divided into three distinct phases:
+To combat this problem, **Synchron** takes a different route. Program execution is divided into three distinct phases:
 
-* *Advance* - in this phase, program execution is advanced until either an `emit`, `await` or a parallel combinations thereof (i.e. `andd` and `orr`) is hit. In other words, execute all straightforward statements, like `local` or `async`.
-* *Gather* - gather all events and values specified in all current `emit` statements, combined with all currently firing external events. Don't advance the program further.
-* *Unblock* - unblock all `await` statements affected by the fired events gathered in the previous phase. Advance all `emit` statements. Advance parallel statements in the following manner:
-  * `orr` - if one of the trails is finished, advance to next statement
-  * `orr` - if all trails are finished, advance to next statement
+* *Advance* - in this phase, program execution is advanced until either an `emit`, `await` or a parallel combination thereof (in `andd` or `orr`) is encountered. In other words, perform all straightforward statements, like `local` or `async`.
+* *Gather* - gather all events and values from all current `emit` statements and combine with all currently firing external events. Don't advance the program further.
+* *Unblock* - unblock all `await` statements affected by the firing events gathered in the previous phase. Advance all `emit` statements. Advance `orr` if at least one of its trails has finished. Advance `andd` if and only if all of its trails have finished.
 
-The *advance - gather - unblock* phases are repeated in that order until the *unblock* phase can't advance the program further (at which point it's either finished or blocked).
+The *advance - gather - unblock* phases are repeated in that order until the *unblock* phase can not advance the program further (at which point the program is either finished or blocked).
 
 # References
 
