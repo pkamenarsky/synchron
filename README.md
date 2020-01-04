@@ -2,7 +2,7 @@
 
 **Synchron** is a synchronous programming DSL for Haskell. *Synchronous reactive concurrent programming* allows for running multiple *trails* simultaneously at logical time steps in reaction to external or internal *events*. The execution model, contrary to actor based or multithreaded models, is deterministic and does not require synchronisation primitives<sup id="a1">[1](#f1)</sup>.
 
-**Synchron** is inspired by **Ceu**<sup id="a2">[2](#f2)</sup> and **Concur**<sup id="a3">[3](#f3)</sup> and is meant as an exploration of the synchronous paradigm in Haskell; it is by no means an efficient implementation and so far lacks a formal specification or operational semantics.
+**Synchron** is inspired by **Céu**<sup id="a2">[2](#f2)</sup> and **Concur**<sup id="a3">[3](#f3)</sup> and is meant as an exploration of the synchronous paradigm in Haskell; it is by no means an efficient implementation and so far lacks a formal specification or operational semantics.
 
 # Example
 
@@ -28,9 +28,11 @@ example = local $ \e -> do              ➊
 
 # Low level details
 
-## Problems with Ceu
+This section explains some low level technicalities of **Synchron** and can be skipped safely.
 
-From *The Ceu Manual* (v0.30, p. 3):
+## Problems with Céu
+
+From *The Céu Manual* (v0.30, p. 3):
 
 > When multiple trails are active at a logical time (i.e. awaking from the same event), Céu schedules them in the order they appear in the program text. This policy is arbitrary, but provides a priority scheme for trails, and also ensures deterministic and reproducible execution for programs.
 
@@ -46,7 +48,7 @@ and
 local $ \e -> andd (emit e 5, await e)
 ```
 
-are **not** equivalent. Due to **Ceu**'s operational semantics, the former will terminate, as expected, while the latter will block forever on `await e`. In the context of Haskell this seems unintuitive and non-compositional: a trail definition, which might come from a completely different module or package, must be aware of (or alternatively, specify) the execution order in parallel statetements to ensure correctness.
+are **not** equivalent. Due to **Céu**'s operational semantics, the former will terminate, as expected, while the latter will block forever on `await e`. In the context of Haskell this seems unintuitive and non-compositional: a trail definition, which might come from a completely different module or package, must be aware of (or alternatively, specify) the execution order in parallel statetements to ensure correctness.
 
 ## Informal semantics
 
@@ -62,8 +64,8 @@ The *advance - gather - unblock* phases are repeated in that order until the *un
 
 # References
 
-<span id="f1">[1]</span> [The Ceu Manual v0.30](https://github.com/ceu-lang/ceu/blob/master/docs/manual/v0.30/ceu-v0.30.pdf)
+<span id="f1">[1]</span> [The Céu Manual v0.30](https://github.com/ceu-lang/ceu/blob/master/docs/manual/v0.30/ceu-v0.30.pdf)
 
-<span id="f2">[2]</span> [The Programming Language Ceu](http://www.ceu-lang.org)
+<span id="f2">[2]</span> [The Programming Language Céu](http://www.ceu-lang.org)
 
 <span id="f3">[3]</span> [Concur - An unusual Web UI Framework](https://github.com/ajnsit/concur)
