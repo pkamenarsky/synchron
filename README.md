@@ -14,7 +14,7 @@ example = local $ \e -> do              ➊
   pure (a + b)
 ```
 
-`local` (➊) creates a new *internal* event (the difference between external and internal events will become clearer later). The `andd` (➋) combinator forks the execution and starts *both* trails (`emit e 5` and `await e`) *simultaneously* and only continues with the next line (➌) when *all* trails are finished.
+`local` (➊) creates a new *internal* event (the difference between external and internal events will become clearer later). The `andd` (➋) combinator forks the execution and starts *both* trails (`emit e 5` and `await e`) *simultaneously* and only continues with the next line (➌) when *all* trails have finished.
 
 `emit` fires the specified event with the given value, while `await` blocks until a given event fires.
 
@@ -62,7 +62,7 @@ To combat this problem, **Synchron** takes a different route. Program execution 
 * *Gather* - gather all events and values from all current `emit` statements and combine with all currently firing external events. Don't advance the program further.
 * *Unblock* - unblock all `await` statements affected by the firing events gathered in the previous phase. Advance all `emit` statements. Advance `orr` if at least one of its trails has finished. Advance `andd` if and only if all of its trails have finished.
 
-The *advance - gather - unblock* phases are repeated in that order until the *unblock* phase can not advance the program further (at which point the program is either finished or blocked).
+The *advance - gather - unblock* phases are repeated in that order until the *unblock* phase can not advance the program further (at which point the program has either finished or is blocked).
 
 ## References
 
