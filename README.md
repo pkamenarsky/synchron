@@ -6,11 +6,11 @@ It is inspired by [**Céu**](http://www.ceu-lang.org) and [**Concur**](https://
 
 Especially [**Concur**](https://github.com/ajnsit/concur) has shown that the synchronous programming paradigm need not stay confined to the embedded or hard real time domain, as it seemingly has so far -- indeed, it lends itself extraordinarily well to programming UIs consisting of complex workflows and user interactions. So much so, that it's arguably one of the most interesting advancements in UI programming since Elm/React.
 
-**Synchron** takes a step back and explores another domain -- that of complex network protocols or data processing pipelines. In contrast to e.g. FRP or the observer pattern, synchronous programming reifies the program's state machine implicitly in the program flow, as opposed to advancing execution through short lived, disconnected callbacks (which "eliminate any vestige of structured programming, such as support for long-lasting loops and automatic variables [and thus] actually disrupt imperative reactivity, becoming 'our generation's goto'"<sup id="a2">[2](#f2)</sup>).
+**Synchron** takes a step back and explores another domain -- that of complex network protocols or data processing pipelines. In contrast to e.g. FRP or the observer pattern, synchronous programming reifies the program's state machine implicitly in the program flow, as opposed to advancing execution through short lived, disconnected callbacks (which "eliminate any vestige of structured programming, such as support for long-lasting loops and automatic variables [and thus] actually disrupt imperative reactivity, becoming 'our generation's goto'"<sup id="a1">[1](#f1)</sup>).
 
 ## Example
 
-Synchronous programming allows for running multiple *trails* simultaneously at logical time steps in reaction to external or internal *events*. The execution model, contrary to actor based or multithreaded models, is deterministic and does not require synchronisation primitives<sup id="a1">[1](#f1)</sup>.
+Synchronous programming allows for running multiple *trails* simultaneously at logical time steps in reaction to external or internal *events*. The execution model, contrary to actor based or multithreaded models, is deterministic and does not require synchronisation primitives<sup id="a2">[2](#f2)</sup>.
 
 ```
 example :: Syn Int
@@ -72,6 +72,7 @@ The *advance - gather - unblock* phases are repeated in that order until the *un
 
 ## References
 
-<span id="f1">[1]</span> [The Céu Manual v0.30](https://github.com/ceu-lang/ceu/blob/master/docs/manual/v0.30/ceu-v0.30.pdf)
+<span id="f1">[1]</span> F. Sant’Anna et al. [Structured Synchronous Reactive Programming with Céu](http://www.ceu-lang.org/chico/ceu_mod15_pre.pdf)
 
-<span id="f2">[2]</span> F. Sant’Anna et al. [Structured Synchronous Reactive Programming with Céu](http://www.ceu-lang.org/chico/ceu_mod15_pre.pdf)
+<span id="f2">[2]</span> [The Céu Manual v0.30](https://github.com/ceu-lang/ceu/blob/master/docs/manual/v0.30/ceu-v0.30.pdf)
+
