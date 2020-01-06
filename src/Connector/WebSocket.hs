@@ -40,10 +40,11 @@ data WebSocketServer s = WebSocketServer (Syn.Event Syn.External WebSocket)
 data WebSocket = WebSocket (Syn.Event Syn.External DataMessage) (TVar (TChan DataMessage))
 
 websocket
-  :: Port
+  :: Monoid v
+  => Port
   -> ConnectionOptions
-  -> (forall s. WebSocketServer s -> IO (Syn.Context a))
-  -> IO (Syn.Context a)
+  -> (forall s. WebSocketServer s -> IO (Syn.Context v a))
+  -> IO (Syn.Context v a)
 websocket port options k = Syn.event $ \e -> do
   ctx <- k (WebSocketServer e)
   forkIO (go ctx e)
@@ -81,13 +82,13 @@ websocket port options k = Syn.event $ \e -> do
 
     backupApp _ respond = respond $ responseLBS status400 [] "Not a WebSocket request"
 
-accept :: WebSocketServer s -> Syn.Syn WebSocket
+accept :: WebSocketServer s -> Syn.Syn v WebSocket
 accept (WebSocketServer e) = Syn.await e
 
-receive :: WebSocket -> Syn.Syn DataMessage
+receive :: WebSocket -> Syn.Syn v DataMessage
 receive (WebSocket e _) = Syn.await e
 
-send :: WebSocket -> DataMessage -> Syn.Syn ()
+send :: WebSocket -> DataMessage -> Syn.Syn v ()
 send (WebSocket _ v) m = Syn.async $ atomically $ do
   outCh <- readTVar v
   writeTChan outCh m

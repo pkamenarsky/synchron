@@ -4,35 +4,42 @@ import Data.IORef
 import Test.Tasty
 import Test.Tasty.HUnit
 
-import Syn
+import Syn hiding (emit, await)
+import qualified Syn
 
-p1 = exhaust $ local $ \e -> do
+emit :: Event Internal a -> a -> Syn () ()
+emit = Syn.emit
+
+await :: Event t a -> Syn () a
+await = Syn.await
+
+p1 = local $ \e -> do
   a <- andd (await e, emit e "A", emit e "C")
   b <- orr [ Left <$> await e, Right <$> emit e "B" ]
   pure (a, b)
 
-p2 = exhaust $ local $ \e -> do
+p2 = local $ \e -> do
   andd (emit e "E", await e)
 
-p2_2 = exhaust $ local $ \e -> do
+p2_2 = local $ \e -> do
   andd (await e, emit e "E")
 
-p2_3 = exhaust $ local $ \e -> do
+p2_3 = local $ \e -> do
   andd ((emit e "E" >> emit e "F"), ((,) <$> await e <*> await e))
 
-p2_4 = exhaust $ local $ \e -> local $ \f -> do
+p2_4 = local $ \e -> local $ \f -> do
   andd (andd (await e, await f), orr [ emit e 5, emit f 6 ])
 
-p2_5 = exhaust $ local $ \e -> local $ \f -> do
+p2_5 = local $ \e -> local $ \f -> do
   andd (orr [ await e, await f ], orr [ emit e 5, emit f 6 ])
 
-p2_6 = exhaust $ local $ \e -> do
+p2_6 = local $ \e -> do
   orr [ Left <$> emit e "E", Right <$> await e ]
 
-p2_7 = exhaust $ local $ \e -> do
+p2_7 = local $ \e -> do
   orr [ Right <$> await e, Left <$> emit e "E" ]
 
-p3 = exhaust $ local $ \e -> local $ \f -> do
+p3 = local $ \e -> local $ \f -> do
   a <- andd
          ( await e >> emit f "F"
          , await f
@@ -40,37 +47,37 @@ p3 = exhaust $ local $ \e -> local $ \f -> do
          )
   pure a
 
-p4 = exhaust $ local $ \e -> local $ \f -> do
+p4 = local $ \e -> local $ \f -> do
   a <- andd
          ( andd (await e, emit f "F")
          , await f
-         , andd (pure "_" :: Syn String, await f >> emit e "E")
+         , andd (pure "_" :: Syn () String, await f >> emit e "E")
          )
   pure a
 
-p5 = exhaust $ local $ \e -> do
+p5 = local $ \e -> do
   andd
     ( go 0 e
     , emit e (Right ())
     )
   where
-    go :: Int -> Event Internal (Either Int ()) -> Syn Int
+    go :: Int -> Event Internal (Either Int ()) -> Syn () Int
     go s e = do
       a <- await e
       case a of
         Left n  -> go (s + n) e
         Right _ -> pure s
 
-p6 = exhaust $ local $ \e -> local $ \f -> local $ \g -> do
+p6 = local $ \e -> local $ \f -> local $ \g -> do
   a <- andd
     ( andd (await e, emit f "F" >> await g >> emit e "E")
     , andd (await f, await g, await e)
     , andd (await e, await g, await f)
-    , andd (pure "_" :: Syn String, await f >> emit g "G")
+    , andd (pure "_" :: Syn () String, await f >> emit g "G")
     )
   pure a
 
-p7 = exhaust $ local $ \e -> local $ \f -> do
+p7 = local $ \e -> local $ \f -> do
   andd
     ( go 0 0 e f
     , do
@@ -82,7 +89,7 @@ p7 = exhaust $ local $ \e -> local $ \f -> do
         emit e (Right ())
     )
   where
-    go :: Int -> Int -> Event Internal (Either Int ()) -> Event Internal Int -> Syn Int
+    go :: Int -> Int -> Event Internal (Either Int ()) -> Event Internal Int -> Syn () Int
     go x y e f = do
       a <- orr [ Left <$> await e, Right <$> await f ]
       case a of
@@ -90,13 +97,13 @@ p7 = exhaust $ local $ \e -> local $ \f -> do
         Right y'       -> go x (y + y') e f
         _              -> pure (x + y)
 
-p8 = exhaust $ pool $ \p -> local $ \e -> do
+p8 = pool $ \p -> local $ \e -> do
   (a, _) <- andd (await e, emit e 5)
   (b, _) <- andd (await e, spawn p (emit e 5))
 
   pure (a + b)
 
-p9 = exhaust $ local $ \e -> pool $ \p -> do
+p9 = local $ \e -> pool $ \p -> do
   spawn p (emit e 5)
   a <- await e
 
@@ -108,7 +115,7 @@ p9 = exhaust $ local $ \e -> pool $ \p -> do
 
   pure (a + b + c)
 
-p9_2 = exhaust $ local $ \e -> pool $ \p -> do
+p9_2 = local $ \e -> pool $ \p -> do
   spawn p (emit e 5)
   a <- await e
 
@@ -118,7 +125,7 @@ p9_2 = exhaust $ local $ \e -> pool $ \p -> do
 
   pure (a + b + c)
 
-p10 = exhaust $ local $ \i -> local $ \o -> pool $ \p -> do
+p10 = local $ \i -> local $ \o -> pool $ \p -> do
   spawn p (go i o 0 3)
 
   andd (await o, emit i 1 >> spawn p (emit i 2 >> spawn p (emit i 3)))
@@ -129,7 +136,7 @@ p10 = exhaust $ local $ \i -> local $ \o -> pool $ \p -> do
       a <- await i
       go i o (x + a) (n - 1)
 
-p11 = exhaust $ do
+p11 = do
   (a, ks) <- fromJust $ runOrr $ mconcat
     [ liftOrr (pure "a")
     , liftOrr (pure "b")
@@ -168,10 +175,10 @@ e14 result = event $ \e -> do
 
 --------------------------------------------------------------------------------
 
-test :: (Show a, Eq a) => IO a -> a -> Assertion
-test f a = f >>= (@?= a)
+test :: (Show a, Eq a) => Syn () a -> a -> Assertion
+test f a = exhaust f >>= (@?= a)
 
-testE :: (Show a, Eq a) => ((a -> IO ()) -> IO (Context b)) -> a -> Assertion
+testE :: (Show a, Eq a) => ((a -> IO ()) -> IO (Context () b)) -> a -> Assertion
 testE f a = do
   v <- newIORef Nothing
   f (writeIORef v . Just)
