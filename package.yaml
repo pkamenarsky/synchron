@@ -27,6 +27,7 @@ dependencies:
 - free
 - http-types
 - transformers
+- replica
 - stm
 - wai
 - wai-websockets

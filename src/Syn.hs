@@ -70,6 +70,7 @@ instance Show (Syn v a) where
   show (Syn (Pure a)) = "Pure"
   show (Syn (Free (Async _ _))) = "Async"
   show (Syn (Free Forever)) = "Forever"
+  show (Syn (Free (View _ _))) = "View"
   show (Syn (Free (Local _ _))) = "Local"
   show (Syn (Free (Emit (EventValue (Event e) _) _))) = "Emit (" <> show e <> ")"
   show (Syn (Free (Await (Event e) _))) = "Await (" <> show e <> ")"
@@ -107,7 +108,7 @@ andd' [a, b] = do
   pure [a, b]
 andd' (a:as) = concat <$> andd' [(:[]) <$> a, andd' as]
 
-class Andd a b | a -> b where
+class Andd a b | a -> b, b -> a where
   andd :: a -> b
 
 instance Andd (Syn v a, Syn v b) (Syn v (a, b)) where
@@ -250,8 +251,12 @@ advance eid ios rsp@(Syn (Free (And p q next))) v
   = case (p', q') of
       (Syn (Pure a), Syn (Pure b))
         -> advance eid'' ios'' (Syn (next (a, b))) (V (foldV pv' <> foldV qv'))
-      _ -> (eid'', ios'', Syn (Free (And p' q' next)), P pv' qv')
+      _ -> (eid'', ios'', Syn (Free (And p' q' next)), v')
   where
+    v' = case (pv', qv') of
+      (E, E) -> v
+      _ -> P pv' qv'
+
     (pv, qv) = case v of
       P pv qv -> (pv, qv)
       _ -> (E, E)
@@ -266,8 +271,12 @@ advance eid ios rsp@(Syn (Free (Or p q next))) v
         -> advance eid' ios' (Syn (next (a, q'))) (V (foldV pv'))
       (_, Syn (Pure b))
         -> advance eid'' ios'' (Syn (next (b, p'))) (V (foldV qv'))
-      _ -> (eid'', ios'', Syn (Free (Or p' q' next)), P pv' qv')
+      _ -> (eid'', ios'', Syn (Free (Or p' q' next)), v')
   where
+    v' = case (pv', qv') of
+      (E, E) -> v
+      _ -> P pv' qv'
+
     (pv, qv) = case v of
       P pv qv -> (pv, qv)
       _ -> (E, E)
@@ -310,7 +319,7 @@ stepOnce m' eid p v = do
     m = gather p'
     (p'', u) = unblock (m' <> m) p'
 
-stepAll :: Monoid v => M.Map EventId EventValue -> Int -> Syn v a -> V v -> IO (Either a (Int, Syn v a, V v))
+stepAll :: Monoid v => M.Map EventId EventValue -> Int -> Syn v a -> V v -> IO (Either (a, V v) (Int, Syn v a, V v))
 stepAll = go
   where
     go m eid p v = do
@@ -320,15 +329,15 @@ stepAll = go
       -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m))
 
       case (p', u) of
-        (Syn (Pure a), _) -> pure (Left a)
+        (Syn (Pure a), _) -> pure (Left (a, v'))
         (_, True) -> go M.empty eid' p' v'
         (_, False) -> pure (Right (eid', p', v'))
 
-exhaust :: Monoid v => Syn v a -> IO a
+exhaust :: Monoid v => Syn v a -> IO (a, v)
 exhaust p = do
   r <- stepAll M.empty 0 p E
   case r of
-    Left a -> pure a
+    Left (a, v) -> pure (a, foldV v)
     Right _ -> error "Blocked"
 
 -- Pools -----------------------------------------------------------------------
@@ -373,16 +382,16 @@ type Application v a r = (a -> IO (Context v r)) -> IO (Context v r)
 run :: Syn v a -> IO (Context v a)
 run p = Context <$> newMVar (Just (0, p, E))
 
-push :: Monoid v => Context v b -> Event External a -> a -> IO (Maybe b)
+push :: Monoid v => Context v b -> Event t a -> a -> IO (Maybe b, v)
 push (Context v) e@(Event ei) a = modifyMVar v $ \v -> case v of
   Just (eid, p, v) -> do
     r <- stepAll (M.singleton ei (EventValue e a)) eid p v
 
     case r of
-      Left a -> pure (Nothing, Just a)
-      Right (eid', p', v') -> pure (Just (eid', p', v'), Nothing)
+      Left (a, v) -> pure (Nothing, (Just a, foldV v))
+      Right (eid', p', v') -> pure (Just (eid', p', v'), (Nothing, foldV v'))
 
-  _ -> pure (Nothing, Nothing)
+  _ -> pure (Nothing, (Nothing, mempty))
 
 event :: Application v (Event External a) r
 event app = newEvent >>= app

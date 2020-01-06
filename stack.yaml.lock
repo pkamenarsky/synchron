@@ -11,6 +11,20 @@ packages:
       sha256: d55193fde9c1233a341a7432ad4ac6afbd5d0a34690ab00c8be68b96ec522c2d
   original:
     hackage: broadcast-chan-0.2.0.2@sha256:563a482d8a2e2102598cc7d41d0cf079aee09077d3b6d6009b1fd1e41a74f1e9
+- completed:
+    cabal-file:
+      size: 2016
+      sha256: 37fbd822c4b163189e676bd7d7dfcbef24ea3dfc989a66a20352283f4b02b46d
+    name: replica
+    version: 0.1.0.0
+    git: https://github.com/pkamenarsky/replica.git
+    pantry-tree:
+      size: 1319
+      sha256: 26ae65774e11b998f44a789706856ecc5e4689bcc55d5d413f8e7a49bca9cdaa
+    commit: 4d93f16fe7397ee13a8842a01dad9224870c025e
+  original:
+    git: https://github.com/pkamenarsky/replica.git
+    commit: 4d93f16fe7397ee13a8842a01dad9224870c025e
 snapshots:
 - completed:
     size: 498155

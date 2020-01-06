@@ -3,8 +3,10 @@
 module Main where
 
 import Control.Applicative
+import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TChan
+import Control.Monad (void)
 
 import Control.Monad (forever)
 
@@ -13,12 +15,15 @@ import qualified Connector.WebSocket as WS
 import qualified Connector.Log as Log
 import qualified Connector.HTTP as HTTP
 
-import Concur
+import           Concur
+import           Replica.VDOM             (Attr(AText, ABool, AEvent, AMap), HTML, DOMEvent, VDOM(VNode, VText), defaultIndex)
 import qualified Syn
 
 import Network.HTTP.Types.Status
 import Network.WebSockets.Connection
 import Network.Wai
+import Network.Wai.Handler.Warp (run)
+import qualified Network.Wai.Handler.Replica as Replica
 
 testConcur :: IO ()
 testConcur = Log.logger $ \log -> do
@@ -87,6 +92,7 @@ testConcur = Log.logger $ \log -> do
 --             log $ show r
 --             go log ws ws2
 
+testWebsockets :: IO (Syn.Context () ())
 testWebsockets =
   WS.websocket 3922 defaultConnectionOptions $ \wss -> do
   WS.websocket 3923 defaultConnectionOptions $ \wss2 -> Syn.run $ do
@@ -101,6 +107,7 @@ testWebsockets =
     WS.send ws2 d
     WS.send ws2 d2
 
+testChat :: IO (Syn.Context () ())
 testChat
   = WS.websocket 3922 defaultConnectionOptions $ \wss ->
     Syn.run $
@@ -134,3 +141,32 @@ testSignals = Log.logger $ \log -> runConcur $ do
 
 main :: IO ()
 main = testSignals
+
+-- Replica ---------------------------------------------------------------------
+
+runReplica p = do
+  ctx <- newMVar (Just (eventId + 1, p, Syn.E))
+  run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions id () $ \() -> modifyMVar ctx $ \ctx' -> case ctx' of
+    Just (eid, p, v) -> do
+      r <- Syn.stepAll mempty eid p v
+      case r of
+        Left (_, v') -> do
+          print p
+          pure (Nothing, Just (Syn.foldV v', (), \_ -> pure (pure ())))
+        Right (eid', p', v') -> do
+          print p'
+          pure (Just (eid', p', v'), Just (Syn.foldV v', (), push (Syn.Context ctx)))
+    Nothing -> pure (Nothing, Nothing)
+  where
+    eventId = 0
+    event = Syn.Event (Syn.Internal eventId)
+    push ctx e = Just $ void $ Syn.push ctx event e
+
+text txt = Syn.view [VText txt] 
+
+div_ props chs = Syn.local $ \e -> do
+  Syn.view [VNode props chs]
+
+testReplica = do
+  runReplica $ text "REPLICA"
+  
