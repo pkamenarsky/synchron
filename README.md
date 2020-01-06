@@ -1,16 +1,20 @@
 # Synchron
 
-**Synchron** is a *synchronous reactive concurrent programming* DSL for Haskell. 
+**Synchron** is a *synchronous reactive concurrent programming* DSL for Haskell.
 
 It is inspired by [**Céu**](http://www.ceu-lang.org) and [**Concur**](https://github.com/ajnsit/concur) and is meant to be an exploration of the synchronous paradigm in Haskell; it is by no means an efficient implementation and so far lacks a formal specification or operational semantics.
 
+In contrast to e.g. FRP or the observer pattern, synchronous programming reifies the program's state machine implicitly in the program flow, as opposed to advancing execution through short lived, disconnected callbacks (which "eliminate any vestige of structured programming, such as support for long-lasting loops and automatic variables"<sup id="a1">[1](#f1)</sup>). Additionally, the execution model, contrary to actor based or multithreaded models, is deterministic and does not require synchronisation primitives<sup id="a2">[2](#f2)</sup>.
+
 Especially [**Concur**](https://github.com/ajnsit/concur) has shown that the synchronous programming paradigm need not stay confined to the embedded or hard real time domain, as it seemingly has so far -- indeed, it lends itself extraordinarily well to programming UIs consisting of complex workflows and user interactions. So much so, that it's arguably one of the most interesting advancements in UI programming since Elm/React.
 
-**Synchron** takes a step back and explores another domain -- that of complex network protocols or data processing pipelines. In contrast to e.g. FRP or the observer pattern, synchronous programming reifies the program's state machine implicitly in the program flow, as opposed to advancing execution through short lived, disconnected callbacks (which "eliminate any vestige of structured programming, such as support for long-lasting loops and automatic variables [and thus] actually disrupt imperative reactivity, becoming 'our generation's goto'"<sup id="a1">[1](#f1)</sup>).
+**Synchron** explores the synchronous paradigm in a more general setting.
 
 ## Example
 
-Synchronous programming allows for running multiple *trails* simultaneously at logical time steps in reaction to external or internal *events*. The execution model, contrary to actor based or multithreaded models, is deterministic and does not require synchronisation primitives<sup id="a2">[2](#f2)</sup>.
+In synchronous programming, reactions take no time with respect to the external environment, i.e. an event can both be caused and perceived at the same time.
+
+**Synchron** allows for running multiple *trails* simultaneously at logical time steps in reaction to external or internal *events*. 
 
 ```
 example :: Syn Int
@@ -28,7 +32,7 @@ example = local $ \e -> do              ➊
 
 *TODO* Talk about state machine in data vs code; "reification of time"; "reinversion of control"
 
-*TODO* Talk about interesting and unexplored applications of syncrhronous programming
+*TODO* Talk about interesting and unexplored applications of synchronous programming
 
 *TODO* Contrast with FRP
 
