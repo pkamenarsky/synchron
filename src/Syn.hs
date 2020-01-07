@@ -40,6 +40,10 @@ data EventValue = forall t a. EventValue (Event t a) a
 instance Show EventValue where
   show (EventValue e _) = show e
 
+data Remote v a = Remote
+  { advanceRemote :: Syn v a -> Syn v a
+  }
+
 data SynF v next
   = Async (IO ()) next
 
