@@ -137,11 +137,15 @@ instance Andd (Syn v a, Syn v b, Syn v c, Syn v d, Syn v e, Syn v f) (Syn v (a, 
 --------------------------------------------------------------------------------
 
 data Orr v a = Orr (Syn v (a, Orr v a)) | D
-  deriving Show
+  deriving (Functor, Show)
 
 runOrr :: Orr v a -> Maybe (Syn v (a, Orr v a))
 runOrr (Orr o) = Just o
 runOrr D = Nothing
+
+unsafeRunOrr :: Orr v a -> Syn v (a, Orr v a)
+unsafeRunOrr (Orr o) = o
+unsafeRunOrr D = error "unsafeRunOrr: D"
 
 instance Semigroup (Orr v a) where
   D <> q = q
@@ -303,10 +307,10 @@ gather (Syn (Free (Await _ _))) = M.empty
 gather (Syn (Free (Emit e@(EventValue (Event ei) _) next))) = M.singleton ei e
 
 -- and
-gather (Syn (Free (And p q next))) = gather p <> gather q
+gather (Syn (Free (And p q next))) = gather q <> gather p
 
 -- or
-gather (Syn (Free (Or p q next))) = gather p <> gather q
+gather (Syn (Free (Or p q next))) = gather q <> gather p
 
 --------------------------------------------------------------------------------
 
