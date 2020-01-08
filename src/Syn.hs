@@ -81,6 +81,17 @@ instance Show (Syn v a) where
   show (Syn (Free (Or a b _))) = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
   show (Syn (Free (And a b _))) = "And [" <> show a <> ", " <> show b <> "]"
 
+mapView :: (v -> u) -> (u -> v) -> Syn v a -> Syn u a
+mapView f g (Syn m) = Syn (hoistFree (go f g) m)
+  where
+    go f g (Async io next) = Async io next
+    go f g Forever = Forever
+    go f g (View v next) = View (f v) next
+    go f g (Local k next) = Local (\e -> mapView f g (k e)) next
+    go f g (Await e next) = Await e next
+    go f g (Or p q next) = Or (mapView f g p) (mapView f g q) (\(a, b) -> next (a, mapView g f b))
+    go f g (And p q next) = And (mapView f g p) (mapView f g q) next
+
 async :: IO () -> Syn v ()
 async io = Syn $ liftF (Async io ())
 
@@ -327,7 +338,7 @@ stepOnce m' eid p v = do
     m = gather p'
     (p'', u) = unblock (m' <> m) p'
 
-stepAll :: Monoid v => M.Map EventId EventValue -> Int -> Syn v a -> V v -> IO (Either (a, V v) (Int, Syn v a, V v))
+stepAll :: Monoid v => M.Map EventId EventValue -> Int -> Syn v a -> V v -> IO (Either (Maybe a, V v) (Int, Syn v a, V v))
 stepAll = go
   where
     go m eid p v = do
@@ -337,11 +348,12 @@ stepAll = go
       -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m))
 
       case (p', u) of
-        (Syn (Pure a), _) -> pure (Left (a, v'))
+        (Syn (Pure a), _) -> pure (Left (Just a, v'))
+        (Syn (Free Forever), _) -> pure (Left (Nothing, v'))
         (_, True) -> go M.empty eid' p' v'
         (_, False) -> pure (Right (eid', p', v'))
 
-exhaust :: Monoid v => Syn v a -> IO (a, v)
+exhaust :: Monoid v => Syn v a -> IO (Maybe a, v)
 exhaust p = do
   r <- stepAll M.empty 0 p E
   case r of
@@ -396,10 +408,38 @@ push (Context v) e@(Event ei) a = modifyMVar v $ \v -> case v of
     r <- stepAll (M.singleton ei (EventValue e a)) eid p v
 
     case r of
-      Left (a, v) -> pure (Nothing, (Just a, foldV v))
+      Left (a, v) -> pure (Nothing, (a, foldV v))
       Right (eid', p', v') -> pure (Just (eid', p', v'), (Nothing, foldV v'))
 
   _ -> pure (Nothing, (Nothing, mempty))
 
 event :: Application v (Event External a) r
 event app = newEvent >>= app
+
+--------------------------------------------------------------------------------
+
+newtype Frame = Frame Int
+  deriving (Eq, Ord, Num)
+
+type Run v a = [([EventId], Syn v a)]
+
+stepAll'
+  :: Monoid v
+  => M.Map EventId EventValue
+  -> Frame
+  -> Int
+  -> Syn v a
+  -> V v
+  -> IO (Either (Frame, a, V v) (Frame, Int, Syn v a, V v))
+stepAll' = go
+  where
+    go m t eid p v = do
+      (eid', p', v', u) <- stepOnce m eid p v
+
+      -- traceIO ("*** " <> show p)
+      -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m))
+
+      case (p', u) of
+        (Syn (Pure a), _) -> pure (Left (t, a, v'))
+        (_, True) -> go M.empty (t + 1) eid' p' v'
+        (_, False) -> pure (Right (t, eid', p', v'))

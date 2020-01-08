@@ -17,6 +17,8 @@ import qualified Connector.HTTP as HTTP
 
 import           Concur
 import           Replica.VDOM             (Attr(AText, ABool, AEvent, AMap), HTML, DOMEvent, VDOM(VNode, VText), defaultIndex)
+import           Replica.DOM
+import           Replica.Props
 import qualified Syn
 
 import Network.HTTP.Types.Status
@@ -25,40 +27,42 @@ import Network.Wai
 import Network.Wai.Handler.Warp (run)
 import qualified Network.Wai.Handler.Replica as Replica
 
-testConcur :: IO ()
-testConcur = Log.logger $ \log -> do
-  v1 <- registerDelay 1000000
-  v2 <- registerDelay 2000000
-  v3 <- registerDelay 1500000
-  v4 <- registerDelay 3000000
-  v5 <- registerDelay 2500000
+import Prelude hiding (div)
 
-  (_, rs) <- runConcur $ do
-    (_, rs) <- orr'
-      [ dp log v3 "V3"
-      , dp log v5 "V5"
-      , do
-          (_, rs) <- orr' [ dp log v1 "A", dp log v2 "B", dp log v4 "C" ]
-          (_, rs) <- orr' rs
-          (_, rs) <- orr' rs
-          pure ()
-      ]
-    (_, rs) <- orr' rs
-    orr' rs
-
-  print $ length rs
-
-  where
-    dp log v s = do
-      log ("BEFORE: " <> s)
-      step $ do
-        v' <- readTVar v
-        check v'
-      log ("AFTER: " <> s)
-
-    f c n = do
-      step $ writeTChan c (show n)
-      f c (n + 1)
+-- testConcur :: IO ()
+-- testConcur = Log.logger $ \log -> do
+--   v1 <- registerDelay 1000000
+--   v2 <- registerDelay 2000000
+--   v3 <- registerDelay 1500000
+--   v4 <- registerDelay 3000000
+--   v5 <- registerDelay 2500000
+-- 
+--   (_, rs) <- runConcur $ do
+--     (_, rs) <- orr'
+--       [ dp log v3 "V3"
+--       , dp log v5 "V5"
+--       , do
+--           (_, rs) <- orr' [ dp log v1 "A", dp log v2 "B", dp log v4 "C" ]
+--           (_, rs) <- orr' rs
+--           (_, rs) <- orr' rs
+--           pure ()
+--       ]
+--     (_, rs) <- orr' rs
+--     orr' rs
+-- 
+--   print $ length rs
+-- 
+--   where
+--     dp log v s = do
+--       log ("BEFORE: " <> s)
+--       step $ do
+--         v' <- readTVar v
+--         check v'
+--       log ("AFTER: " <> s)
+-- 
+--     f c n = do
+--       step $ writeTChan c (show n)
+--       f c (n + 1)
 
 -- testConnectors :: IO ()
 -- testConnectors = do
@@ -146,12 +150,12 @@ main = testSignals
 
 runReplica p = do
   ctx <- newMVar (Just (eventId + 1, p, Syn.E))
-  run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions id () $ \() -> modifyMVar ctx $ \ctx' -> case ctx' of
+  run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> modifyMVar ctx $ \ctx' -> case ctx' of
     Just (eid, p, v) -> do
       r <- Syn.stepAll mempty eid p v
       case r of
         Left (_, v') -> do
-          print p
+          putStrLn "Done"
           pure (Nothing, Just (Syn.foldV v', (), \_ -> pure (pure ())))
         Right (eid', p', v') -> do
           print p'
@@ -162,11 +166,7 @@ runReplica p = do
     event = Syn.Event (Syn.Internal eventId)
     push ctx e = Just $ void $ Syn.push ctx event e
 
-text txt = Syn.view [VText txt] 
-
-div_ props chs = Syn.local $ \e -> do
-  Syn.view [VNode props chs]
-
 testReplica = do
-  runReplica $ text "REPLICA"
+  runReplica $ Syn.local $ \e -> do
+    div [ style [("color", "red")] ] [ text "Synchron" ]
   
