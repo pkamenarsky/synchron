@@ -1,7 +1,8 @@
-{-# LANGUAGE ConstraintKinds     #-}
-{-# LANGUAGE FlexibleContexts    #-}
-{-# LANGUAGE OverloadedStrings   #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ConstraintKinds             #-}
+{-# LANGUAGE FlexibleContexts            #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving  #-}
+{-# LANGUAGE OverloadedStrings           #-}
+{-# LANGUAGE ScopedTypeVariables         #-}
 
 module Replica.DOM where
 
@@ -10,6 +11,7 @@ import           Control.Monad            (void)
 
 import           Replica.Props            (Props(Props), Prop(PropText, PropBool, PropEvent, PropMap), key)
 
+import           Data.Bifunctor           (second)
 import           Data.Monoid              ((<>))
 import qualified Data.Text                as T
 
@@ -21,23 +23,24 @@ import qualified Replica.VDOM             as R
 import           Syn
 
 newtype HTML = HTML { runHTML :: Context HTML () -> R.HTML }
+  deriving (Semigroup, Monoid)
 
 el :: T.Text -> [Props a] -> [Syn HTML a] -> Syn HTML a
 el e attrs children = do
   attrs' <- traverse toAttr attrs
   mapView
-    (\children -> HTML $ \ctx -> [VNode e (M.fromList $ fmap fst attrs') (runHTML children ctx)])
-    undefined -- (\[VNode _ _ children] -> children)
+    (\children -> HTML $ \ctx -> [VNode e (M.fromList $ fmap (second ($ ctx) . fst) attrs') (runHTML children ctx)])
+    (\(HTML html) -> HTML $ \ctx -> case html ctx of [VNode _ _ children] -> children)
     (orr (children <> concatMap snd attrs'))
   where
-    toAttr :: Props a -> Syn HTML ((T.Text, Attr), [Syn HTML a])
-    toAttr (Props k (PropText v)) = pure ((k, AText v), [])
-    toAttr (Props k (PropBool v)) = pure ((k, ABool v), [])
+    toAttr :: Props a -> Syn HTML ((T.Text, Context HTML () -> Attr), [Syn HTML a])
+    toAttr (Props k (PropText v)) = pure ((k, \_ -> AText v), [])
+    toAttr (Props k (PropBool v)) = pure ((k, \_ -> ABool v), [])
     toAttr (Props k (PropEvent extract)) = local $ \e -> do
-      pure ((k, AEvent $ \de -> void $ push (undefined :: Context () b) e de), [extract <$> await e])
+      pure ((k, \ctx -> AEvent $ \de -> void $ push ctx e de), [extract <$> await e])
     toAttr (Props k (PropMap m)) = do
       m' <- mapM toAttr m
-      pure ((k, AMap $ M.fromList $ fmap fst m'), concatMap snd m')
+      pure ((k, \ctx -> AMap $ M.fromList $ fmap (second ($ ctx) . fst) m'), concatMap snd m')
 
 text :: T.Text -> Syn HTML a
 text txt = view (HTML $ \_ -> [VText txt]) >> forever

@@ -10,15 +10,19 @@ import Control.Monad (void)
 
 import Control.Monad (forever)
 
+import qualified Data.Text as T
+
 import qualified Connector.WebSocket as WS
 
 import qualified Connector.Log as Log
 import qualified Connector.HTTP as HTTP
 
 import           Concur
-import           Replica.VDOM             (Attr(AText, ABool, AEvent, AMap), HTML, DOMEvent, VDOM(VNode, VText), defaultIndex)
+import           Replica.VDOM             (Attr(AText, ABool, AEvent, AMap), HTML, DOMEvent, VDOM(VNode, VText), defaultIndex, fireEvent)
+import           Replica.VDOM.Types       (DOMEvent(DOMEvent))
 import           Replica.DOM
 import           Replica.Props
+import           Replica.Events
 import qualified Syn
 
 import Network.HTTP.Types.Status
@@ -149,24 +153,30 @@ main = testSignals
 -- Replica ---------------------------------------------------------------------
 
 runReplica p = do
-  ctx <- newMVar (Just (eventId + 1, p, Syn.E))
-  run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> modifyMVar ctx $ \ctx' -> case ctx' of
-    Just (eid, p, v) -> do
-      r <- Syn.stepAll mempty eid p v
-      case r of
-        Left (_, v') -> do
-          putStrLn "Done"
-          pure (Nothing, Just (Syn.foldV v', (), \_ -> pure (pure ())))
-        Right (eid', p', v') -> do
-          print p'
-          pure (Just (eid', p', v'), Just (Syn.foldV v', (), push (Syn.Context ctx)))
-    Nothing -> pure (Nothing, Nothing)
-  where
-    eventId = 0
-    event = Syn.Event (Syn.Internal eventId)
-    push ctx e = Just $ void $ Syn.push ctx event e
+  ctx   <- newMVar (Just (0, p, Syn.E))
+  block <- newMVar ()
+  run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> do
+    takeMVar block
+    modifyMVar ctx $ \ctx' -> case ctx' of
+      Just (eid, p, v) -> do
+        r <- Syn.stepAll mempty eid p v
+        case r of
+          Left (_, v') -> do
+            pure (Nothing, Just (runHTML (Syn.foldV v') (Syn.Context ctx), (), \_ -> pure (pure ())))
+          Right (eid', p', v') -> do
+            let html = runHTML (Syn.foldV v') (Syn.Context ctx)
+            pure
+              ( Just (eid', p', v')
+              , Just (html, (), \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))
+              )
+      Nothing -> pure (Nothing, Nothing)
+
+counter x = do
+  div [ onClick ] [ text (T.pack $ show x) ]
+  counter (x + 1)
 
 testReplica = do
   runReplica $ Syn.local $ \e -> do
-    div [ style [("color", "red")] ] [ text "Synchron" ]
+    div [ style [("color", "red")], onClick ] [ text "Synchron" ]
+    div [ style [("color", "green")] ] [ text "Synchron2" ]
   

@@ -345,11 +345,11 @@ stepAll = go
       (eid', p', v', u) <- stepOnce m eid p v
 
       -- traceIO ("*** " <> show p)
-      -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m))
+      -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m) <> ", U: " <> show u)
 
       case (p', u) of
         (Syn (Pure a), _) -> pure (Left (Just a, v'))
-        (Syn (Free Forever), _) -> pure (Left (Nothing, v'))
+        (Syn (Free Forever), _) -> pure (Right (eid', p', v')) -- pure (Left (Nothing, v'))
         (_, True) -> go M.empty eid' p' v'
         (_, False) -> pure (Right (eid', p', v'))
 
