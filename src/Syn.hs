@@ -86,16 +86,16 @@ instance Show (Syn v a) where
   show (Syn (Free (Or _ a b _))) = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
   show (Syn (Free (And a b _))) = "And [" <> show a <> ", " <> show b <> "]"
 
-mapView :: (v -> u) -> (u -> v) -> Syn v a -> Syn u a
-mapView f g (Syn m) = Syn (hoistFree (go f g) m)
+mapView :: (u -> v) -> Syn u a -> Syn v a
+mapView f (Syn m) = Syn (hoistFree (go f) m)
   where
-    go f g (Async io next) = Async io next
-    go f g Forever = Forever
-    go f g (View v next) = View (f v) next
-    go f g (Local k next) = Local (\e -> mapView f g (k e)) next
-    go f g (Await e next) = Await e next
-    -- go f g (Or f p q next) = Or (mapView f g p) (mapView f g q) (\(a, b) -> next (a, mapView g f b))
-    go f g (And p q next) = And (mapView f g p) (mapView f g q) next
+    go f (Async io next) = Async io next
+    go f Forever = Forever
+    go f (View v next) = View (f v) next
+    go f (Local k next) = Local (\e -> mapView f (k e)) next
+    go f (Await e next) = Await e next
+    go f (Or u p q next) = Or (f . u) p q next
+    go f (And p q next) = And (mapView f p) (mapView f q) next
 
 async :: IO () -> Syn v ()
 async io = Syn $ liftF (Async io ())
