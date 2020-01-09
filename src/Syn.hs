@@ -4,8 +4,11 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Syn where
 
@@ -13,6 +16,8 @@ import Control.Applicative
 import Control.Concurrent
 import Control.Monad.Fail
 import Control.Monad.Free
+
+import Data.Type.Equality
 
 import Data.IORef
 import Data.List (intercalate)
@@ -55,7 +60,7 @@ data SynF v next
   | Emit EventValue next
   | forall t a. Await (Event t a) (a -> next)
 
-  | forall a. Or (Syn v a) (Syn v a) ((a, Syn v a) -> next)
+  | forall a u. Monoid u => Or (u -> v) (Syn u a) (Syn u a) ((a, Syn u a) -> next)
   | forall a b. And (Syn v a) (Syn v b) ((a, b) -> next)
 
 deriving instance Functor (SynF v)
@@ -66,7 +71,7 @@ newtype Syn v a = Syn { getSyn :: Free (SynF v) a }
 instance MonadFail (Syn v) where
   fail e = error e
 
-instance Alternative (Syn v) where
+instance Monoid v => Alternative (Syn v) where
   empty = forever
   a <|> b = orr [a, b]
 
@@ -78,7 +83,7 @@ instance Show (Syn v a) where
   show (Syn (Free (Local _ _))) = "Local"
   show (Syn (Free (Emit (EventValue (Event e) _) _))) = "Emit (" <> show e <> ")"
   show (Syn (Free (Await (Event e) _))) = "Await (" <> show e <> ")"
-  show (Syn (Free (Or a b _))) = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
+  show (Syn (Free (Or _ a b _))) = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
   show (Syn (Free (And a b _))) = "And [" <> show a <> ", " <> show b <> "]"
 
 mapView :: (v -> u) -> (u -> v) -> Syn v a -> Syn u a
@@ -89,7 +94,7 @@ mapView f g (Syn m) = Syn (hoistFree (go f g) m)
     go f g (View v next) = View (f v) next
     go f g (Local k next) = Local (\e -> mapView f g (k e)) next
     go f g (Await e next) = Await e next
-    go f g (Or p q next) = Or (mapView f g p) (mapView f g q) (\(a, b) -> next (a, mapView g f b))
+    -- go f g (Or f p q next) = Or (mapView f g p) (mapView f g q) (\(a, b) -> next (a, mapView g f b))
     go f g (And p q next) = And (mapView f g p) (mapView f g q) next
 
 async :: IO () -> Syn v ()
@@ -111,9 +116,9 @@ await :: Event t a -> Syn v a
 await e = Syn $ liftF (Await e id)
 
 -- | Left biased.
-orr :: [Syn v a] -> Syn v a
+orr :: Monoid v => [Syn v a] -> Syn v a
 orr [a] = a
-orr [a, b] = fmap fst $ Syn $ liftF (Or a b id)
+orr [a, b] = fmap fst $ Syn $ liftF (Or id a b id)
 orr (a:as) = orr [a, orr as]
 
 andd' :: [Syn v a] -> Syn v [a]
@@ -162,14 +167,14 @@ unsafeRunOrr :: Orr v a -> Syn v (a, Orr v a)
 unsafeRunOrr (Orr o) = o
 unsafeRunOrr D = error "unsafeRunOrr: D"
 
-instance Semigroup (Orr v a) where
+instance Monoid v => Semigroup (Orr v a) where
   D <> q = q
   p <> D = p
   Orr p <> Orr q = Orr $ do
-    ((a, m), n) <- Syn (liftF (Or p q id))
+    ((a, m), n) <- Syn (liftF (Or id p q id))
     pure (a, m <> Orr n)
 
-instance Monoid (Orr v a) where
+instance Monoid v => Monoid (Orr v a) where
   mempty = D
 
 liftOrr :: Syn v a -> Orr v a
@@ -208,25 +213,27 @@ unblock m rsp@(Syn (Free (And p q next)))
     (q', uq) = unblock m q
 
 -- or
-unblock m rsp@(Syn (Free (Or p q next)))
+unblock m rsp@(Syn (Free (Or u p q next)))
   = case (p', q') of
       (Syn (Pure a), _)
         -> (Syn (next (a, q')), True)
       (_, Syn (Pure b))
         -> (Syn (next (b, p')), True)
-      _ -> (Syn (Free (Or p' q' next)), up || uq)
+      _ -> (Syn (Free (Or u p' q' next)), up || uq)
   where
     (p', up) = unblock m p
     (q', uq) = unblock m q
 
 -- advance ---------------------------------------------------------------------
 
-data V v = E | V v | P (V v) (V v)
+data V v = E | V v | forall u. Monoid u => P (u -> v) (V u) (V u)
+
+deriving instance Functor V
 
 foldV :: Monoid v => V v -> v
 foldV E = mempty
 foldV (V v) = v
-foldV (P p q) = foldV p <> foldV q
+foldV (P u p q) = u (foldV p) <> u (foldV q)
 
 -- advance . advance == advance
 advance
@@ -274,34 +281,81 @@ advance eid ios rsp@(Syn (Free (And p q next))) v
   where
     v' = case (pv', qv') of
       (E, E) -> v
-      _ -> P pv' qv'
+      _ -> P id pv' qv'
 
     (pv, qv) = case v of
-      P pv qv -> (pv, qv)
+      P u pv qv -> (u <$> pv, u <$> qv)
       _ -> (E, E)
 
     (eid', ios', p', pv') = advance (eid + 1) ios p pv
     (eid'', ios'', q', qv') = advance (eid' + 1) ios' q qv
 
 -- or
-advance eid ios rsp@(Syn (Free (Or p q next))) v
+-- advance eid ios rsp@(Syn (Free (Or u p q next))) v
+--   = case (p', q') of
+--       (Syn (Pure a), _)
+--         -> advance eid' ios' (Syn (next (a, q'))) (u <$> V id (foldV pv'))
+--       (_, Syn (Pure b))
+--         -> advance eid'' ios'' (Syn (next (b, p'))) (u <$> V id (foldV qv'))
+--       _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), unsafeCoerce v')
+--   where
+--     v' = case (pv', qv') of
+--       (E, E) -> undefined -- v
+--       (_, _) -> P pv' qv'
+-- 
+--     (pv, qv) = case v of
+--       P pv qv -> (pv, qv)
+--       _ -> (E, E)
+-- 
+--     (eid', ios', p', pv') = advance (eid + 1) ios p (_ pv)
+--     (eid'', ios'', q', qv') = advance (eid' + 1) ios' q qv
+
+advance eid ios rsp@(Syn (Free (Or u p q next))) v@(P u' pv qv)
   = case (p', q') of
       (Syn (Pure a), _)
-        -> advance eid' ios' (Syn (next (a, q'))) (V (foldV pv'))
+        -> advance eid' ios' (Syn (next (a, q'))) (u <$> V (foldV pv'))
       (_, Syn (Pure b))
-        -> advance eid'' ios'' (Syn (next (b, p'))) (V (foldV qv'))
-      _ -> (eid'', ios'', Syn (Free (Or p' q' next)), v')
+        -> advance eid'' ios'' (Syn (next (b, p'))) (u <$> V (foldV qv'))
+      _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), v')
   where
     v' = case (pv', qv') of
       (E, E) -> v
-      _ -> P pv' qv'
+      (_, _) -> P u' (unsafeCoerce pv') (unsafeCoerce qv')
 
-    (pv, qv) = case v of
-      P pv qv -> (pv, qv)
-      _ -> (E, E)
+    (eid', ios', p', pv') = advance (eid + 1) ios p (unsafeCoerce pv)
+    (eid'', ios'', q', qv') = advance (eid' + 1) ios' q (unsafeCoerce qv)
 
-    (eid', ios', p', pv') = advance (eid + 1) ios p pv
-    (eid'', ios'', q', qv') = advance (eid' + 1) ios' q qv
+advance eid ios rsp@(Syn (Free (Or u p q next))) v
+  = case (p', q') of
+      (Syn (Pure a), _)
+        -> advance eid' ios' (Syn (next (a, q'))) (u <$> V (foldV pv'))
+      (_, Syn (Pure b))
+        -> advance eid'' ios'' (Syn (next (b, p'))) (u <$> V (foldV qv'))
+      _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), v')
+  where
+    v' = case (pv', qv') of
+      (E, E) -> v
+      (_, _) -> P u pv' qv'
+
+    (eid', ios', p', pv') = advance (eid + 1) ios p E
+    (eid'', ios'', q', qv') = advance (eid' + 1) ios' q E
+
+test :: Int -> [IO ()] -> Syn v a -> V v -> (Int, [IO ()], Syn v a, V v)
+test eid ios (Syn (Free (Or (u :: u -> v) p q next))) v@(P (u' :: u' -> v') pv qv) = case (undefined :: ((u -> v) :~: (u' -> v'))) of
+  Refl ->
+    let (eid', ios', p', pv') = test (eid + 1) ios p pv
+        (eid'', ios'', q', qv') = test (eid' + 1) ios' q qv
+
+        v' = case (pv', qv') of
+          (E, E) -> v
+          (_, _) -> P u' pv' qv'
+        
+    in case (p', q') of
+      (Syn (Pure a), _)
+        -> test eid' ios' (Syn (next (a, q'))) (u <$> V (foldV pv'))
+      (_, Syn (Pure b))
+        -> test eid'' ios'' (Syn (next (b, p'))) (u <$> V (foldV qv'))
+      _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), v')
 
 -- gather ----------------------------------------------------------------------
 
@@ -325,7 +379,7 @@ gather (Syn (Free (Emit e@(EventValue (Event ei) _) next))) = M.singleton ei e
 gather (Syn (Free (And p q next))) = gather q <> gather p
 
 -- or
-gather (Syn (Free (Or p q next))) = gather q <> gather p
+gather (Syn (Free (Or _ p q next))) = gather q <> gather p
 
 --------------------------------------------------------------------------------
 
@@ -364,7 +418,7 @@ exhaust p = do
 
 data Pool v = Pool (Event Internal (Syn v ()))
 
-pool :: (Pool v -> Syn v a) -> Syn v a
+pool :: Monoid v => (Pool v -> Syn v a) -> Syn v a
 pool f = local $ \e -> go e $ mconcat
   [ liftOrr (Right . Left <$> await e)
   , liftOrr (Left <$> f (Pool e))
