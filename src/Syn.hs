@@ -94,6 +94,7 @@ mapView f (Syn m) = Syn (hoistFree (go f) m)
   where
     go f (Async io next) = Async io next
     go f Forever = Forever
+    go f (Emit e next) = Emit e next
     go f (View v next) = View (f v) next
     go f (Local k next) = Local (\e -> mapView f (k e)) next
     go f (Await e next) = Await e next

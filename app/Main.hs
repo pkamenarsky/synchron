@@ -185,15 +185,21 @@ toHTML (Container props children) = HTML $ \ctx ->
   where
     toProps ctx (Click e) = ("onClick", AEvent $ \de -> void $ Syn.push ctx e de)
 
-abstractConter :: Int -> Syn.Syn Container a
-abstractConter x = Syn.local $ \e -> Syn.local $ \f -> do
+abstractConter :: Syn.Event Syn.Internal Int -> Int -> Syn.Syn Container a
+abstractConter o x = Syn.local $ \e -> Syn.local $ \f -> do
   Syn.view (Container [Click e] [Number x])
   Syn.await e
   Syn.view (Container [Click f] [Label "You clicked!"])
   Syn.await f
-  abstractConter (x + 1)
+  Syn.emit o (x + 1)
+  abstractConter o (x + 1)
 
-realCounter x = Syn.mapView toHTML (abstractConter x)
+realCounter x = Syn.local $ \y -> do
+  void $ Syn.andd (Syn.mapView toHTML (abstractConter y x), label x y)
+  where
+    label x y = do
+      Right x' <- Syn.orr [ Left <$> text (T.pack $ show x), Right <$> Syn.await y ]
+      label x' y
 
 counter x = do
   div [ onClick ] [ text (T.pack $ show x) ]
