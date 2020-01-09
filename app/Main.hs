@@ -10,6 +10,7 @@ import Control.Monad (void)
 
 import Control.Monad (forever)
 
+import qualified Data.Map as M
 import qualified Data.Text as T
 
 import qualified Connector.WebSocket as WS
@@ -170,6 +171,29 @@ runReplica p = do
               , Just (html, (), \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))
               )
       Nothing -> pure (Nothing, Nothing)
+
+data ContainerProps = Click (Syn.Event Syn.Internal DOMEvent)
+data Container = Label T.Text | Number Int | Container [ContainerProps] [Container]
+
+toHTML (Label x) = HTML $ \_ -> [VText x]
+toHTML (Number x) = HTML $ \_ -> [VText (T.pack $ show x)]
+toHTML (Container props children) = HTML $ \ctx ->
+  [ VNode "div"
+      (M.fromList $ fmap (toProps ctx) props)
+      (concatMap (($ ctx) . runHTML . toHTML) children)
+  ]
+  where
+    toProps ctx (Click e) = ("onClick", AEvent $ \de -> void $ Syn.push ctx e de)
+
+abstractConter :: Int -> Syn.Syn Container a
+abstractConter x = Syn.local $ \e -> Syn.local $ \f -> do
+  Syn.view (Container [Click e] [Number x])
+  Syn.await e
+  Syn.view (Container [Click f] [Label "You clicked!"])
+  Syn.await f
+  abstractConter (x + 1)
+
+realCounter x = Syn.mapView toHTML (abstractConter x)
 
 counter x = do
   div [ onClick ] [ text (T.pack $ show x) ]
