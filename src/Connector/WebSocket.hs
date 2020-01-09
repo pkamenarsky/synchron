@@ -24,6 +24,8 @@ import Control.Monad.IO.Class
 import Data.IORef
 import Data.Maybe (catMaybes, isJust, fromMaybe)
 
+import Type.Reflection
+
 import Network.HTTP.Types
 
 import Network.Wai
@@ -41,6 +43,7 @@ data WebSocket = WebSocket (Syn.Event Syn.External DataMessage) (TVar (TChan Dat
 
 websocket
   :: Monoid v
+  => Typeable v
   => Port
   -> ConnectionOptions
   -> (forall s. WebSocketServer s -> IO (Syn.Context v a))

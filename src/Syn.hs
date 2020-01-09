@@ -229,14 +229,15 @@ unblock m rsp@(Syn (Free (Or u p q next)))
 
 -- advance ---------------------------------------------------------------------
 
-data V v = E | V v | forall u. (Monoid u, Typeable u) => P (u -> v) (V u) (V u)
+data V v = E | V v | forall u. (Monoid u, Typeable u) => P (u -> v) (V u) (V u) | forall u. (Monoid u, Typeable u) => I (u -> v) (V u)
 
 deriving instance Functor V
 
 foldV :: Monoid v => V v -> v
 foldV E = mempty
 foldV (V v) = v
-foldV (P u p q) = u ((foldV p) <> (foldV q))
+foldV (I u v) = foldV (u <$> v)
+foldV (P u p q) = foldV (u <$> p) <> foldV (u <$> q)
 
 -- advance . advance == advance
 advance
@@ -326,18 +327,18 @@ advance eid ios (Syn (Free (Or (u :: u -> v) p q next))) v@(P (u' :: u' -> v') p
         
     in case (p', q') of
       (Syn (Pure a), _)
-        -> advance eid' ios' (Syn (next (a, q'))) (V (u $ foldV pv'))
+        -> advance eid' ios' (Syn (next (a, q'))) (I u pv')
       (_, Syn (Pure b))
-        -> advance eid'' ios'' (Syn (next (b, p'))) (V (u $ foldV qv'))
+        -> advance eid'' ios'' (Syn (next (b, p'))) (I u qv')
       _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), v')
   Nothing -> error "NOT REFL"
 
 -- advance eid ios rsp@(Syn (Free (Or u p q next))) v@(P u' pv qv)
 --   = case (p', q') of
 --       (Syn (Pure a), _)
---         -> advance eid' ios' (Syn (next (a, q'))) (V (u $ foldV pv'))
+--         -> advance eid' ios' (Syn (next (a, q'))) (u <$> V (foldV pv'))
 --       (_, Syn (Pure b))
---         -> advance eid'' ios'' (Syn (next (b, p'))) (V (u $ foldV qv'))
+--         -> advance eid'' ios'' (Syn (next (b, p'))) (u <$> V (foldV qv'))
 --       _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), v')
 --   where
 --     v' = case (pv', qv') of
@@ -350,9 +351,9 @@ advance eid ios (Syn (Free (Or (u :: u -> v) p q next))) v@(P (u' :: u' -> v') p
 advance eid ios rsp@(Syn (Free (Or u p q next))) v
   = case (p', q') of
       (Syn (Pure a), _)
-        -> advance eid' ios' (Syn (next (a, q'))) (V (u $ foldV pv'))
+        -> advance eid' ios' (Syn (next (a, q'))) (I u pv')
       (_, Syn (Pure b))
-        -> advance eid'' ios'' (Syn (next (b, p'))) (V (u $ foldV qv'))
+        -> advance eid'' ios'' (Syn (next (b, p'))) (I u qv')
       _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), v')
   where
     v' = case (pv', qv') of
@@ -403,8 +404,8 @@ stepAll = go
     go m eid p v = do
       (eid', p', v', u) <- stepOnce m eid p v
 
-      -- traceIO ("*** " <> show p)
-      -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m) <> ", U: " <> show u)
+      traceIO ("*** " <> show p)
+      traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m) <> ", U: " <> show u)
 
       case (p', u) of
         (Syn (Pure a), _) -> pure (Left (Just a, v'))

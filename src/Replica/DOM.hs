@@ -30,7 +30,6 @@ el e attrs children = do
   attrs' <- traverse toAttr attrs
   mapView
     (\children -> HTML $ \ctx -> [VNode e (M.fromList $ fmap (second ($ ctx) . fst) attrs') (runHTML children ctx)])
-    (\(HTML html) -> HTML $ \ctx -> case html ctx of [VNode _ _ children] -> children)
     (orr (children <> concatMap snd attrs'))
   where
     toAttr :: Props a -> Syn HTML ((T.Text, Context HTML () -> Attr), [Syn HTML a])

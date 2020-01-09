@@ -167,7 +167,7 @@ runReplica p = do
             let html = runHTML (Syn.foldV v') (Syn.Context ctx)
             pure
               ( Just (eid', p', v')
-              , Just (html, (), \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))
+              , Just (html, (), \re -> fmap (>> (print re >> putMVar block())) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))
               )
       Nothing -> pure (Nothing, Nothing)
 
@@ -179,4 +179,5 @@ testReplica = do
   runReplica $ Syn.local $ \e -> do
     div [ style [("color", "red")], onClick ] [ text "Synchron" ]
     div [ style [("color", "green")] ] [ text "Synchron2" ]
+    div [ style [("color", "blue")] ] [ text "Synchron3" ]
   
