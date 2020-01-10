@@ -176,7 +176,7 @@ e14 result = event $ \e -> do
 --------------------------------------------------------------------------------
 
 test :: (Show a, Eq a) => Syn () a -> a -> Assertion
-test f a = exhaust f >>= (@?= a)
+test f a = ((fromJust . fst) <$> exhaust f) >>= (@?= a)
 
 testE :: (Show a, Eq a) => ((a -> IO ()) -> IO (Context () b)) -> a -> Assertion
 testE f a = do
@@ -187,7 +187,7 @@ testE f a = do
 
 main :: IO ()
 main = defaultMain $ testGroup "Unit tests"
-  [ testCase "p1" $ test p1 (("A",(),()),Left "B")
+  [ testCase "p1" $ test p1 (("C",(),()),Left "B")
   , testCase "p2" $ test p2 ((),"E")
   , testCase "p2_2" $ test p2_2 ("E",())
   , testCase "p2_3" $ test p2_3 ((),("E","F"))

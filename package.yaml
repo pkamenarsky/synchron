@@ -25,8 +25,10 @@ dependencies:
 - amqp
 - async
 - containers
+- comonad
 - free
 - http-types
+- list-zipper
 - transformers
 - replica
 - stm

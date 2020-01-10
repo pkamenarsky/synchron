@@ -282,6 +282,7 @@ advance eid ios (Syn (Free (Async io next))) v
 advance eid ios rsp@(Syn (Free (And p q next))) v
   = case (p', q') of
       (Syn (Pure a), Syn (Pure b))
+           -- TODO: should we foldV here? or use parallel Is?
         -> advance eid'' ios'' (Syn (next (a, b))) (V (foldV pv' <> foldV qv'))
       _ -> (eid'', ios'', Syn (Free (And p' q' next)), v')
   where
@@ -390,36 +391,36 @@ gather (Syn (Free (Or _ p q next))) = gather q <> gather p
 
 --------------------------------------------------------------------------------
 
-stepOnce :: Typeable v => Monoid v => M.Map EventId EventValue -> Int -> Syn v a -> V v -> IO (Int, Syn v a, V v, Bool)
+stepOnce :: Typeable v => Monoid v => M.Map EventId EventValue -> Int -> Syn v a -> V v -> IO (Int, Syn v a, V v, [EventId], Bool)
 stepOnce m' eid p v = do
   sequence_ ios
-  pure (eid', p'', v', u)
+  pure (eid', p'', v', M.keys m, u)
   where
     (eid', ios, p', v') = advance eid [] p v
     m = gather p'
     (p'', u) = unblock (m' <> m) p'
 
-stepAll :: Typeable v => Monoid v => M.Map EventId EventValue -> Int -> Syn v a -> V v -> IO (Either (Maybe a, V v) (Int, Syn v a, V v))
-stepAll = go
+stepAll :: Typeable v => Monoid v => M.Map EventId EventValue -> Int -> Syn v a -> V v -> IO (Either (Maybe a) (Int, Syn v a), V v, [([EventId], Syn v a)])
+stepAll = go []
   where
-    go m eid p v = do
-      (eid', p', v', u) <- stepOnce m eid p v
+    go es m eid p v = do
+      (eid', p', v', eks, u) <- stepOnce m eid p v
 
       -- traceIO ("*** " <> show p)
       -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m) <> ", U: " <> show u)
 
       case (p', u) of
-        (Syn (Pure a), _) -> pure (Left (Just a, v'))
-        (Syn (Free Forever), _) -> pure (Right (eid', p', v')) -- pure (Left (Nothing, v'))
-        (_, True) -> go M.empty eid' p' v'
-        (_, False) -> pure (Right (eid', p', v'))
+        (Syn (Pure a), _) -> pure (Left (Just a), v', (eks, p):es)
+        (Syn (Free Forever), _) -> pure (Right (eid', p'), v', (eks, p):es) -- pure (Left (Nothing, v'))
+        (_, True) -> go ((eks ,p):es) M.empty eid' p' v'
+        (_, False) -> pure (Right (eid', p'), v', (eks, p):es)
 
 exhaust :: Typeable v => Monoid v => Syn v a -> IO (Maybe a, v)
 exhaust p = do
   r <- stepAll M.empty 0 p E
   case r of
-    Left (a, v) -> pure (a, foldV v)
-    Right _ -> error "Blocked"
+    (Left a, v, _)  -> pure (a, foldV v)
+    (Right _, _, _) -> error "Blocked"
 
 -- Pools -----------------------------------------------------------------------
 
@@ -469,39 +470,10 @@ push (Context v) e@(Event ei) a = modifyMVar v $ \v -> case v of
     r <- stepAll (M.singleton ei (EventValue e a)) eid p v
 
     case r of
-      Left (a, v) -> pure (Nothing, (a, foldV v))
-      Right (eid', p', v') -> pure (Just (eid', p', v'), (Nothing, foldV v'))
+      (Left a, v, _) -> pure (Nothing, (a, foldV v))
+      (Right (eid', p'), v', _) -> pure (Just (eid', p', v'), (Nothing, foldV v'))
 
   _ -> pure (Nothing, (Nothing, mempty))
 
 event :: Application v (Event External a) r
 event app = newEvent >>= app
-
---------------------------------------------------------------------------------
-
-newtype Frame = Frame Int
-  deriving (Eq, Ord, Num)
-
-type Run v a = [([EventId], Syn v a)]
-
-stepAll'
-  :: Monoid v
-  => Typeable v
-  => M.Map EventId EventValue
-  -> Frame
-  -> Int
-  -> Syn v a
-  -> V v
-  -> IO (Either (Frame, a, V v) (Frame, Int, Syn v a, V v))
-stepAll' = go
-  where
-    go m t eid p v = do
-      (eid', p', v', u) <- stepOnce m eid p v
-
-      -- traceIO ("*** " <> show p)
-      -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m))
-
-      case (p', u) of
-        (Syn (Pure a), _) -> pure (Left (t, a, v'))
-        (_, True) -> go M.empty (t + 1) eid' p' v'
-        (_, False) -> pure (Right (t, eid', p', v'))

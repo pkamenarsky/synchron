@@ -162,9 +162,9 @@ runReplica p = do
       Just (eid, p, v) -> do
         r <- Syn.stepAll mempty eid p v
         case r of
-          Left (_, v') -> do
+          (Left _, v', _) -> do
             pure (Nothing, Just (runHTML (Syn.foldV v') (Syn.Context ctx), (), \_ -> pure (pure ())))
-          Right (eid', p', v') -> do
+          (Right (eid', p'), v', _) -> do
             let html = runHTML (Syn.foldV v') (Syn.Context ctx)
             pure
               ( Just (eid', p', v')

@@ -12,6 +12,13 @@ packages:
   original:
     hackage: broadcast-chan-0.2.0.2@sha256:563a482d8a2e2102598cc7d41d0cf079aee09077d3b6d6009b1fd1e41a74f1e9
 - completed:
+    hackage: list-zipper-0.0.9@sha256:9c5d6120f9a94bfe44c1a6d406fe80bb011a369526d972a720d73eab0aabc900,2413
+    pantry-tree:
+      size: 326
+      sha256: 85c575f1e57b795c46c3de9d9e9d8041a1a76f25abc724f4b9008b2234f362bf
+  original:
+    hackage: list-zipper-0.0.9@sha256:9c5d6120f9a94bfe44c1a6d406fe80bb011a369526d972a720d73eab0aabc900,2413
+- completed:
     cabal-file:
       size: 2016
       sha256: 37fbd822c4b163189e676bd7d7dfcbef24ea3dfc989a66a20352283f4b02b46d
