@@ -186,7 +186,7 @@ testE f a = do
   b @?= Just a
 
 main :: IO ()
-main = defaultMain $ testGroup "Unit tests"
+main = defaultMain $ testGroup "Example tests"
   [ testCase "p1" $ test p1 (("C",(),()),Left "B")
   , testCase "p2" $ test p2 ((),"E")
   , testCase "p2_2" $ test p2_2 ("E",())
