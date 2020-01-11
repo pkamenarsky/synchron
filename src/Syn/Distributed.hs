@@ -20,14 +20,14 @@ import           Data.Map (Map)
 import           Data.Set (Set)
 import qualified Data.Set as S
 
-import Syn (Syn (..), SynF (..), V (..), EventId, EventValue)
+import Syn (Syn (..), SynF (..), V (..), Event, EventId, EventValue)
 
 --------------------------------------------------------------------------------
 
 newtype AwaitingId = AwaitingId EventId deriving (Eq, Ord, Show)
 newtype EmittedId = EmittedId EventId deriving (Eq, Ord, Show)
 
--- | A trail run
+-- | An internal trail run
 newtype Run = Run { getRun :: [(Set AwaitingId, Set EmittedId)] }
 
 instance Semigroup Run where
@@ -35,35 +35,34 @@ instance Semigroup Run where
 
 --------------------------------------------------------------------------------
 
+newtype Frame = Frame Int deriving (Eq, Ord, Num, Show)
+
 data Trail v a = Trail
-  { advance :: Run -> IO (Maybe a, V v, Run)
-  , wake    :: ((Maybe a, V v, Run) -> IO ()) -> IO ()
-  , reset   :: Int -> IO ()
-  , commit  :: IO ()
+  { advance :: [Map EventId EventValue] -> IO ()
+  , commit  :: Frame -> IO ()
   }
 
-newTrail :: Syn v a -> IO (Trail v a)
-newTrail (Syn (Free (And p q next))) = do
-  pt <- newTrail p
-  qt <- newTrail q
+push :: Event t b -> b -> Trail v a -> IO ()
+push = undefined
+
+newTrail :: ((Maybe a, V v, Run) -> IO ()) -> Syn v a -> IO (Trail v a)
+newTrail notify (Syn (Free (And p q next))) = do
+  pt <- newTrail undefined p
+  qt <- newTrail undefined q
 
   pure $ Trail
-    { advance = \m -> undefined
+    { advance = \run -> undefined
         -- a <- advance pt m
         -- b <- advance qt m
         -- case (a, b) of
         --   ((a', va, ra), (b', vb, rb)) -> undefined
 
-    , wake    = \cb -> undefined
-    , reset   = undefined
     , commit  = undefined
     }
-newTrail (Syn (Free (Or f p q next))) = do
+newTrail notify (Syn (Free (Or f p q next))) = do
   v <- newIORef p
   pure $ Trail
     { advance = undefined
-    , wake    = undefined
-    , reset   = undefined
     , commit  = undefined
     }
 

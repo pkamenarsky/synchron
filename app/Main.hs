@@ -18,18 +18,18 @@ import qualified Connector.WebSocket as WS
 import qualified Connector.Log as Log
 import qualified Connector.HTTP as HTTP
 
-import           Concur
 import           Replica.VDOM             (Attr(AText, ABool, AEvent, AMap), HTML, DOMEvent, VDOM(VNode, VText), defaultIndex, fireEvent)
 import           Replica.VDOM.Types       (DOMEvent(DOMEvent))
 import           Replica.DOM
-import           Replica.Props
+import           Replica.Props hiding (async)
 import           Replica.Events
-import qualified Syn
+import           Syn
 
 import Network.HTTP.Types.Status
 import Network.WebSockets.Connection
 import Network.Wai
-import Network.Wai.Handler.Warp (run)
+
+import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai.Handler.Replica as Replica
 
 import Prelude hiding (div)
@@ -101,11 +101,11 @@ import Prelude hiding (div)
 --             log $ show r
 --             go log ws ws2
 
-testWebsockets :: IO (Syn.Context () ())
+testWebsockets :: IO (Context () ())
 testWebsockets =
   WS.websocket 3922 defaultConnectionOptions $ \wss -> do
-  WS.websocket 3923 defaultConnectionOptions $ \wss2 -> Syn.run $ do
-    (ws, ws2) <- Syn.andd (WS.accept wss, WS.accept wss2)
+  WS.websocket 3923 defaultConnectionOptions $ \wss2 -> run $ do
+    (ws, ws2) <- andd (WS.accept wss, WS.accept wss2)
 
     d <- WS.receive ws
     d2 <- WS.receive ws2
@@ -116,63 +116,54 @@ testWebsockets =
     WS.send ws2 d
     WS.send ws2 d2
 
-testChat :: IO (Syn.Context () ())
+testChat :: IO (Context () ())
 testChat
   = WS.websocket 3922 defaultConnectionOptions $ \wss ->
-    Syn.run $
-    Syn.pool $ \p ->
-    Syn.local $ \msg -> do
+    run $
+    pool $ \p ->
+    local $ \msg -> do
       acceptConn p wss msg
   where
     acceptConn p wss msg = do
       ws <- WS.accept wss
-      Syn.spawn p (chatConn ws msg)
+      spawn p (chatConn ws msg)
       acceptConn p wss msg
 
     chatConn ws msg = do
-      r <- Syn.orr [ Left <$> WS.receive ws, Right <$> Syn.await msg ]
+      r <- orr [ Left <$> WS.receive ws, Right <$> await msg ]
       case r of
         Left m -> do
-          Syn.emit msg m
+          emit msg m
           WS.send ws m
         Right msg -> WS.send ws msg
       chatConn ws msg
 
-testSignals :: IO ()
-testSignals = Log.logger $ \log -> runConcur $ do
-  s  <- newSignal
-  bs <- dupSignal s
-  emit s 5
-  emit s 6
-  b  <- andd [ Right <$> await bs, Left <$> await bs ]
-
-  log $ show b
-
 main :: IO ()
-main = testSignals
+main = pure ()
 
 -- Replica ---------------------------------------------------------------------
 
 runReplica p = do
-  ctx   <- newMVar (Just (0, p, Syn.E))
+  ctx   <- newMVar (Just (0, p, E))
   block <- newMVar ()
-  run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> do
+  Warp.run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> do
     takeMVar block
     modifyMVar ctx $ \ctx' -> case ctx' of
       Just (eid, p, v) -> do
-        r <- Syn.stepAll mempty eid p v
+        r <- stepAll mempty eid p v
         case r of
           (Left _, v', _) -> do
-            pure (Nothing, Just (runHTML (Syn.foldV v') (Syn.Context ctx), (), \_ -> pure (pure ())))
+            -- print (show (runHTML (foldV v') (Context ctx)))
+            pure (Nothing, Just (runHTML (foldV v') (Context ctx), (), \_ -> pure (pure ())))
           (Right (eid', p'), v', _) -> do
-            let html = runHTML (Syn.foldV v') (Syn.Context ctx)
+            let html = runHTML (foldV v') (Context ctx)
             pure
               ( Just (eid', p', v')
               , Just (html, (), \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))
               )
       Nothing -> pure (Nothing, Nothing)
 
-data ContainerProps = Click (Syn.Event Syn.Internal DOMEvent)
+data ContainerProps = Click (Event Internal DOMEvent)
 data Container = Label T.Text | Number Int | Container [ContainerProps] [Container]
 
 toHTML (Label x) = HTML $ \_ -> [VText x]
@@ -183,22 +174,22 @@ toHTML (Container props children) = HTML $ \ctx ->
       (concatMap (($ ctx) . runHTML . toHTML) children)
   ]
   where
-    toProps ctx (Click e) = ("onClick", AEvent $ \de -> void $ Syn.push ctx e de)
+    toProps ctx (Click e) = ("onClick", AEvent $ \de -> void $ push ctx e de)
 
-abstractConter :: Syn.Event Syn.Internal Int -> Int -> Syn.Syn Container a
-abstractConter o x = Syn.local $ \e -> Syn.local $ \f -> do
-  Syn.view (Container [Click e] [Number x])
-  Syn.await e
-  Syn.view (Container [Click f] [Label "You clicked!"])
-  Syn.await f
-  Syn.emit o (x + 1)
+abstractConter :: Event Internal Int -> Int -> Syn Container a
+abstractConter o x = local $ \e -> local $ \f -> do
+  view (Container [Click e] [Number x])
+  await e
+  view (Container [Click f] [Label "You clicked!"])
+  await f
+  emit o (x + 1)
   abstractConter o (x + 1)
 
-realCounter x = Syn.local $ \y -> do
-  void $ Syn.andd (Syn.mapView toHTML (abstractConter y x), label x y)
+realCounter x = local $ \y -> do
+  void $ andd (mapView toHTML (abstractConter y x), label x y)
   where
     label x y = do
-      Right x' <- Syn.orr [ Left <$> text (T.pack $ show x), Right <$> Syn.await y ]
+      Right x' <- orr [ Left <$> text (T.pack $ show x), Right <$> await y ]
       label x' y
 
 counter x = do
@@ -206,8 +197,47 @@ counter x = do
   counter (x + 1)
 
 testReplica = do
-  runReplica $ Syn.local $ \e -> do
+  runReplica $ local $ \e -> do
     div [ style [("color", "red")], onClick ] [ text "Synchron" ]
     div [ style [("color", "green")], onClick ] [ text "Synchron2" ]
     div [ style [("color", "blue")] ] [ text "Synchron3" ]
+
+inputOnEnter v = do
+  e <- input [ autofocus True, placeholder "Enter", value v, Left <$> onInput, Right <$> onKeyDown ]
+  case e of
+    Left e  -> inputOnEnter (targetValue $ target e)
+    Right e -> if kbdKey e == "Enter"
+      then pure v
+      else inputOnEnter v
+
+addition = do
+  a <- inputOnEnter ""
+  button [ onClick ] [ text "Next" ]
+  b <- inputOnEnter ""
+  button [ onClick ] [ text "Add" ]
+  div [] [ text ("Result :" <> T.pack (show (read (T.unpack a) + read (T.unpack b)))) ]
+
+widget = do
+  textarea [ onClick ] [ ]
+  view mempty
+  pure ()
   
+--------------------------------------------------------------------------------
+
+shared :: Syn () ()
+shared = local $ \end -> local $ \st -> pool $ \p -> do
+  spawn p (set st end)
+  spawn p (get st)
+  await end
+  where
+    set st end = do
+      emit st 4
+      emit st 5
+      emit st 6
+      emit st 7
+      emit end ()
+
+    get st = do
+      a <- await st
+      async (print a)
+      get st

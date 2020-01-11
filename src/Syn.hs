@@ -48,8 +48,9 @@ data EventValue = forall t a. EventValue (Event t a) a
 instance Show EventValue where
   show (EventValue e _) = show e
 
-data Remote v a = Remote
-  { advanceRemote :: Syn v a -> Syn v a
+data Trail v a = Trail
+  { notify :: ([EventId], M.Map EventId EventValue) -> IO ()
+  , p      :: MVar (Syn v a)
   }
 
 data SynF v next
@@ -59,12 +60,17 @@ data SynF v next
 
   | View v next
 
+  | forall a. Remote (IO (Trail v a)) (a -> next)
+  | forall a. RemoteU (Trail v a) (a -> next)
+
   | forall a b. Local (Event Internal a -> Syn v b) (b -> next)
   | Emit EventValue next
   | forall t a. Await (Event t a) (a -> next)
 
   | forall a u. (Typeable u, Monoid u) => Or (u -> v) (Syn u a) (Syn u a) ((a, Syn u a) -> next)
   | forall a b. And (Syn v a) (Syn v b) ((a, b) -> next)
+
+  | forall a b. And_T (Trail v a) (Trail v b) ((a, b) -> next)
 
 deriving instance Functor (SynF v)
 
