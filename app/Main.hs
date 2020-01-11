@@ -203,7 +203,7 @@ testReplica = do
     div [ style [("color", "blue")] ] [ text "Synchron3" ]
 
 inputOnEnter v = do
-  e <- input [ autofocus True, placeholder "Enter", value v, Left <$> onInput, Right <$> onKeyDown ]
+  e <- textarea [ autofocus True, placeholder "Enter", value v, Left <$> onInput, Right <$> onKeyDown ] [ text "" ]
   case e of
     Left e  -> inputOnEnter (targetValue $ target e)
     Right e -> if kbdKey e == "Enter"
@@ -215,12 +215,17 @@ addition = do
   button [ onClick ] [ text "Next" ]
   b <- inputOnEnter ""
   button [ onClick ] [ text "Add" ]
-  div [] [ text ("Result :" <> T.pack (show (read (T.unpack a) + read (T.unpack b)))) ]
+  div [ onClick ] [ text ("Result :" <> T.pack (show (read (T.unpack a) + read (T.unpack b)))) ]
+  addition
 
-widget = do
-  textarea [ onClick ] [ ]
-  view mempty
-  pure ()
+additions2 = andd (addition, addition)
+
+additions = pool $ \p -> do
+  spawn p addition
+  spawn p addition
+  spawn p addition
+  spawn p addition
+  Syn.forever
   
 --------------------------------------------------------------------------------
 
