@@ -176,21 +176,21 @@ toHTML (Container props children) = HTML $ \ctx ->
   where
     toProps ctx (Click e) = ("onClick", AEvent $ \de -> void $ push ctx e de)
 
-abstractConter :: Event Internal Int -> Int -> Syn Container a
-abstractConter o x = local $ \e -> local $ \f -> do
-  view (Container [Click e] [Number x])
-  await e
-  view (Container [Click f] [Label "You clicked!"])
-  await f
-  emit o (x + 1)
-  abstractConter o (x + 1)
-
-realCounter x = local $ \y -> do
-  void $ andd (mapView toHTML (abstractConter y x), label x y)
-  where
-    label x y = do
-      Right x' <- orr [ Left <$> text (T.pack $ show x), Right <$> await y ]
-      label x' y
+-- abstractConter :: Event Internal Int -> Int -> Syn Container a
+-- abstractConter o x = local $ \e -> local $ \f -> do
+--   view (Container [Click e] [Number x])
+--   await e
+--   view (Container [Click f] [Label "You clicked!"])
+--   await f
+--   emit o (x + 1)
+--   abstractConter o (x + 1)
+-- 
+-- realCounter x = local $ \y -> do
+--   void $ andd (mapView toHTML (abstractConter y x), label x y)
+--   where
+--     label x y = do
+--       Right x' <- orr [ Left <$> text (T.pack $ show x), Right <$> await y ]
+--       label x' y
 
 counter x = do
   div [ onClick ] [ text (T.pack $ show x) ]
@@ -203,7 +203,7 @@ testReplica = do
     div [ style [("color", "blue")] ] [ text "Synchron3" ]
 
 inputOnEnter v = do
-  e <- textarea [ autofocus True, placeholder "Enter", value v, Left <$> onInput, Right <$> onKeyDown ] [ text "" ]
+  e <- input [ autofocus True, placeholder "Enter", value v, Left <$> onInput, Right <$> onKeyDown ]
   case e of
     Left e  -> inputOnEnter (targetValue $ target e)
     Right e -> if kbdKey e == "Enter"

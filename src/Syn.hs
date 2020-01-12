@@ -60,6 +60,8 @@ data SynF v next
 
   | View v next
 
+  | forall u a. Monoid u => MapView (u -> v) (Syn u a) (a -> next)
+
   | forall a. Remote (IO (Trail v a)) (a -> next)
   | forall a. RemoteU (Trail v a) (a -> next)
 
@@ -67,7 +69,7 @@ data SynF v next
   | Emit EventValue next
   | forall t a. Await (Event t a) (a -> next)
 
-  | forall a u. (Typeable u, Monoid u) => Or (u -> v) (Syn u a) (Syn u a) ((a, (Syn u a, V u)) -> next)
+  | forall a. Or (Syn v a) (Syn v a) ((a, Syn v a) -> next)
   | forall a b. And (Syn v a) (Syn v b) ((a, b) -> next)
 
   | forall a b. And_T (Trail v a) (Trail v b) ((a, b) -> next)
@@ -80,7 +82,7 @@ newtype Syn v a = Syn { getSyn :: Free (SynF v) a }
 instance MonadFail (Syn v) where
   fail e = error e
 
-instance (Typeable v, Monoid v) => Alternative (Syn v) where
+instance (Monoid v) => Alternative (Syn v) where
   empty = forever
   a <|> b = orr [a, b]
 
@@ -88,25 +90,16 @@ instance Show (Syn v a) where
   show (Syn (Pure a)) = "Pure"
   show (Syn (Free (Async _ _))) = "Async"
   show (Syn (Free Forever)) = "Forever"
+  show (Syn (Free (MapView _ m _))) = "MapView (" <> show m <> ")"
   show (Syn (Free (View _ _))) = "View"
   show (Syn (Free (Local _ _))) = "Local"
   show (Syn (Free (Emit (EventValue (Event e) _) _))) = "Emit (" <> show e <> ")"
   show (Syn (Free (Await (Event e) _))) = "Await (" <> show e <> ")"
-  show (Syn (Free (Or _ a b _))) = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
+  show (Syn (Free (Or a b _))) = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
   show (Syn (Free (And a b _))) = "And [" <> show a <> ", " <> show b <> "]"
 
--- TODO: map only the outermost layer! (i.e. don't descent into Or/And)
-mapView :: (u -> v) -> Syn u a -> Syn v a
-mapView f (Syn m) = Syn (hoistFree (go f) m)
-  where
-    go f (Async io next) = Async io next
-    go f Forever = Forever
-    go f (Emit e next) = Emit e next
-    go f (View v next) = View (f v) next
-    go f (Local k next) = Local (\e -> mapView f (k e)) next
-    go f (Await e next) = Await e next
-    go f (Or u p q next) = Or (f . u) p q next
-    go f (And p q next) = And (mapView f p) (mapView f q) next
+mapView :: Monoid u => (u -> v) -> Syn u a -> Syn v a
+mapView f m = Syn $ liftF (MapView f m id)
 
 async :: IO () -> Syn v ()
 async io = Syn $ liftF (Async io ())
@@ -127,9 +120,9 @@ await :: Event t a -> Syn v a
 await e = Syn $ liftF (Await e id)
 
 -- | Left biased.
-orr :: Typeable v => Monoid v => [Syn v a] -> Syn v a
+orr :: Monoid v => [Syn v a] -> Syn v a
 orr [a] = a
-orr [a, b] = fmap fst $ Syn $ liftF (Or id a b id)
+orr [a, b] = fmap fst $ Syn $ liftF (Or a b id)
 orr (a:as) = orr [a, orr as]
 
 andd' :: [Syn v a] -> Syn v [a]
@@ -167,14 +160,14 @@ instance Andd (Syn v a, Syn v b, Syn v c, Syn v d, Syn v e, Syn v f) (Syn v (a, 
 
 --------------------------------------------------------------------------------
 
-data Orr v a = Orr (Syn v (a, (Orr v a, V v))) | D
+data Orr v a = Orr (Syn v (a, Orr v a)) | D
   deriving (Functor, Show)
 
-runOrr :: Orr v a -> Maybe (Syn v (a, (Orr v a, V v)))
+runOrr :: Orr v a -> Maybe (Syn v (a, Orr v a))
 runOrr (Orr o) = Just o
 runOrr D = Nothing
 
-unsafeRunOrr :: Orr v a -> Syn v (a, (Orr v a, V v))
+unsafeRunOrr :: Orr v a -> Syn v (a, Orr v a)
 unsafeRunOrr (Orr o) = o
 unsafeRunOrr D = error "unsafeRunOrr: D"
 
@@ -182,14 +175,20 @@ instance (Typeable v, Monoid v) => Semigroup (Orr v a) where
   D <> q = q
   p <> D = p
   Orr p <> Orr q = Orr $ do
-    ((a, (m, v)), n) <- Syn (liftF (Or id p q id))
-    pure (a, (m <> undefined, v))
+    ((a, m), n) <- Syn (liftF (Or p q id))
+    pure (a, m <> Orr n)
 
 instance (Typeable v, Monoid v) => Monoid (Orr v a) where
   mempty = D
 
 liftOrr :: Syn v a -> Orr v a
-liftOrr p = Orr ((,(D,E)) <$> p)
+liftOrr p = Orr ((,D) <$> p)
+
+-- isPure ----------------------------------------------------------------------
+
+isPure :: Syn v a -> Maybe a
+isPure (Syn (Pure a)) = Just a
+isPure (Syn _) = Nothing
 
 -- unblock ---------------------------------------------------------------------
 
@@ -200,6 +199,11 @@ unblock
 
 -- pure
 unblock _ rsp@(Syn (Pure a)) = (rsp, False)
+
+-- unblock
+unblock m rsp@(Syn (Free (MapView f v next))) = (Syn (Free (MapView f v' next)), b)
+  where
+    (v', b) = unblock m v
 
 -- forever
 unblock _ rsp@(Syn (Free Forever)) = (rsp, False)
@@ -215,8 +219,8 @@ unblock m rsp@(Syn (Free (Emit _ next))) = (Syn next, True)
 
 -- and
 unblock m rsp@(Syn (Free (And p q next)))
-  = case (p', q') of
-      (Syn (Pure a), Syn (Pure b))
+  = case (isPure p', isPure q') of
+      (Just a, Just b)
         -> (Syn (next (a, b)), True)
       _ -> (Syn (Free (And p' q' next)), up || uq)
   where
@@ -224,35 +228,32 @@ unblock m rsp@(Syn (Free (And p q next)))
     (q', uq) = unblock m q
 
 -- or
-unblock m rsp@(Syn (Free (Or u p q next)))
-  = case (p', q') of
-      (Syn (Pure a), _)
-        -> (Syn (next (a, (q', undefined))), True)
-      (_, Syn (Pure b))
-        -> (Syn (next (b, (p', undefined))), True)
-      _ -> (Syn (Free (Or u p' q' next)), up || uq)
+unblock m rsp@(Syn (Free (Or p q next)))
+  = case (isPure p', isPure q') of
+      (Just a, _)
+        -> (Syn (next (a, q')), True)
+      (_, Just b)
+        -> (Syn (next (b, p')), True)
+      _ -> (Syn (Free (Or p' q' next)), up || uq)
   where
     (p', up) = unblock m p
     (q', uq) = unblock m q
 
 -- advance ---------------------------------------------------------------------
 
-data V v = E | V v | forall u. (Monoid u, Typeable u) => P (u -> v) (V u) (V u) | forall u. (Monoid u, Typeable u) => U (u -> v) (V u)
+data V v = E | V v | P (V v) (V v) | forall u. Monoid u => U (u -> v) (V u)
 
 deriving instance Functor V
-
-instance Semigroup (V v) where
 
 foldV :: Monoid v => V v -> v
 foldV E = mempty
 foldV (V v) = v
-foldV (U u v) = foldV (u <$> v)
-foldV (P u p q) = foldV (u <$> p) <> foldV (u <$> q)
+foldV (U f v) = f (foldV v)
+foldV (P p q) = foldV p <> foldV q
 
 -- advance . advance == advance
 advance
   :: Monoid v
-  => Typeable v
   => Int
   -> [IO ()]
   -> Syn v a
@@ -275,6 +276,16 @@ advance eid ios rsp@(Syn (Free (Await _ _))) v
 advance eid ios rsp@(Syn (Free (View v next))) _
   = advance (eid + 1) ios (Syn next) (V v)
 
+-- mapView
+advance eid ios rsp@(Syn (Free (MapView f m next))) v
+  = case rsp' of
+      Syn (Pure a) -> advance eid' ios' (Syn $ next a) (V $ f (foldV v'))
+      rsp' -> (eid', ios', Syn (Free (MapView f rsp' next)), U f v')
+  where
+    (eid', ios', rsp', v') = case v of
+      U uf uv -> advance (eid + 1) ios m (unsafeCoerce uv)
+      _ -> advance (eid + 1) ios m E
+
 -- local
 advance eid ios (Syn (Free (Local f next))) v
   = advance (eid + 1) ios (f (Event (Internal eid)) >>= Syn . next) v
@@ -289,18 +300,18 @@ advance eid ios (Syn (Free (Async io next))) v
 
 -- and
 advance eid ios rsp@(Syn (Free (And p q next))) v
-  = case (p', q') of
-      (Syn (Pure a), Syn (Pure b))
+  = case (isPure p', isPure q') of
+      (Just a, Just b)
            -- TODO: should we foldV here? or use parallel Is?
         -> advance eid'' ios'' (Syn (next (a, b))) (V (foldV pv' <> foldV qv'))
       _ -> (eid'', ios'', Syn (Free (And p' q' next)), v')
   where
     v' = case (pv', qv') of
       (E, E) -> v
-      _ -> P id pv' qv'
+      _ -> P pv' qv'
 
     (pv, qv) = case v of
-      P u pv qv -> (u <$> pv, u <$> qv)
+      P pv qv -> (pv, qv)
       _ -> (E, E)
 
     (eid', ios', p', pv') = advance (eid + 1) ios p pv
@@ -327,49 +338,49 @@ advance eid ios rsp@(Syn (Free (And p q next))) v
 --     (eid'', ios'', q', qv') = advance (eid' + 1) ios' q qv
 
 -- advance :: Int -> [IO ()] -> Syn v a -> V v -> (Int, [IO ()], Syn v a, V v)
-advance eid ios (Syn (Free (Or (u :: u -> v) p q next))) v@(P (u' :: u' -> v') pv qv) = case (testEquality (typeRep :: TypeRep (u -> v)) (typeRep :: TypeRep (u' -> v'))) of
-  Just Refl ->
-    let (eid', ios', p', pv') = advance (eid + 1) ios p pv
-        (eid'', ios'', q', qv') = advance (eid' + 1) ios' q qv
-
-        v' = case (pv', qv') of
-          (E, E) -> v
-          (_, _) -> P u pv' qv'
-        
-    in case (p', q') of
-      (Syn (Pure a), _)
-        -> advance eid' ios' (Syn (next (a, (q', pv')))) (U u pv')
-      (_, Syn (Pure b))
-        -> advance eid'' ios'' (Syn (next (b, (p', qv')))) (U u qv')
-      _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), v')
-  Nothing -> error "NOT REFL"
-
--- advance eid ios rsp@(Syn (Free (Or u p q next))) v@(P u' pv qv)
---   = case (p', q') of
---       (Syn (Pure a), _)
---         -> advance eid' ios' (Syn (next (a, q'))) (u <$> V (foldV pv'))
---       (_, Syn (Pure b))
---         -> advance eid'' ios'' (Syn (next (b, p'))) (u <$> V (foldV qv'))
---       _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), v')
---   where
---     v' = case (pv', qv') of
---       (E, E) -> v
---       (_, _) -> P u' (unsafeCoerce pv') (unsafeCoerce qv')
+-- advance eid ios (Syn (Free (Or (u :: u -> v) p q next))) v@(P (u' :: u' -> v') pv qv) = case (testEquality (typeRep :: TypeRep (u -> v)) (typeRep :: TypeRep (u' -> v'))) of
+--   Just Refl ->
+--     let (eid', ios', p', pv') = advance (eid + 1) ios p pv
+--         (eid'', ios'', q', qv') = advance (eid' + 1) ios' q qv
 -- 
---     (eid', ios', p', pv') = advance (eid + 1) ios p (unsafeCoerce pv)
---     (eid'', ios'', q', qv') = advance (eid' + 1) ios' q (unsafeCoerce qv)
+--         v' = case (pv', qv') of
+--           (E, E) -> v
+--           (_, _) -> P u pv' qv'
+--         
+--     in case (p', q') of
+--       (Syn (Pure a), _)
+--         -> advance eid' ios' (Syn (next (a, (q', pv')))) (U u pv')
+--       (_, Syn (Pure b))
+--         -> advance eid'' ios'' (Syn (next (b, (p', qv')))) (U u qv')
+--       _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), v')
+--   Nothing -> error "NOT REFL"
 
-advance eid ios rsp@(Syn (Free (Or u p q next))) v
-  = case (p', q') of
-      (Syn (Pure a), _)
-        -> advance eid' ios' (Syn (next (a, (q', pv')))) (U u pv')
-      (_, Syn (Pure b))
-        -> advance eid'' ios'' (Syn (next (b, (p', qv')))) (U u qv')
-      _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), v')
+advance eid ios rsp@(Syn (Free (Or p q next))) v@(P pv qv)
+  = case (isPure p', isPure q') of
+      (Just a, _)
+        -> advance eid' ios' (Syn (next (a, q'))) (V (foldV pv'))
+      (_, Just b)
+        -> advance eid'' ios'' (Syn (next (b, p'))) (V (foldV qv'))
+      _ -> (eid'', ios'', Syn (Free (Or p' q' next)), v')
   where
     v' = case (pv', qv') of
       (E, E) -> v
-      (_, _) -> P u pv' qv'
+      (_, _) -> P pv' qv'
+
+    (eid', ios', p', pv') = advance (eid + 1) ios p pv
+    (eid'', ios'', q', qv') = advance (eid' + 1) ios' q qv
+
+advance eid ios rsp@(Syn (Free (Or p q next))) v
+  = case (isPure p', isPure q') of
+      (Just a, _)
+        -> advance eid' ios' (Syn (next (a, q'))) (V (foldV pv'))
+      (_, Just b)
+        -> advance eid'' ios'' (Syn (next (b, p'))) (V (foldV qv'))
+      _ -> (eid'', ios'', Syn (Free (Or p' q' next)), v')
+  where
+    v' = case (pv', qv') of
+      (E, E) -> v
+      (_, _) -> P pv' qv'
 
     (eid', ios', p', pv') = advance (eid + 1) ios p E
     (eid'', ios'', q', qv') = advance (eid' + 1) ios' q E
@@ -382,6 +393,9 @@ gather
 
 -- pure
 gather (Syn (Pure _)) = M.empty
+
+-- mapview
+gather (Syn (Free (MapView _ m next))) = gather m
 
 -- forever
 gather (Syn (Free Forever)) = M.empty
@@ -396,11 +410,11 @@ gather (Syn (Free (Emit e@(EventValue (Event ei) _) next))) = M.singleton ei e
 gather (Syn (Free (And p q next))) = gather q <> gather p
 
 -- or
-gather (Syn (Free (Or _ p q next))) = gather q <> gather p
+gather (Syn (Free (Or p q next))) = gather q <> gather p
 
 --------------------------------------------------------------------------------
 
-stepOnce :: Typeable v => Monoid v => M.Map EventId EventValue -> Int -> Syn v a -> V v -> IO (Int, Syn v a, V v, [EventId], Bool)
+stepOnce :: Monoid v => M.Map EventId EventValue -> Int -> Syn v a -> V v -> IO (Int, Syn v a, V v, [EventId], Bool)
 stepOnce m' eid p v = do
   sequence_ ios
   pure (eid', p'', v', M.keys m, u)
@@ -409,18 +423,17 @@ stepOnce m' eid p v = do
     m = gather p'
     (p'', u) = unblock (m' <> m) p'
 
-stepAll :: Typeable v => Monoid v => M.Map EventId EventValue -> Int -> Syn v a -> V v -> IO (Either (Maybe a) (Int, Syn v a), V v, [([EventId], Syn v a)])
+stepAll :: Monoid v => M.Map EventId EventValue -> Int -> Syn v a -> V v -> IO (Either (Maybe a) (Int, Syn v a), V v, [([EventId], Syn v a)])
 stepAll = go []
   where
     go es m eid p v = do
       (eid', p', v', eks, u) <- stepOnce m eid p v
 
-      -- traceIO ("*** " <> show p)
-      -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m) <> ", U: " <> show u)
+      traceIO ("*** " <> show p)
+      traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m) <> ", U: " <> show u)
 
-      case (p', u) of
-        (Syn (Pure a), _) -> pure (Left (Just a), v', (eks, p):es)
-        (Syn (Free Forever), _) -> pure (Right (eid', p'), v', (eks, p):es) -- pure (Left (Nothing, v'))
+      case (isPure p', u) of
+        (Just a, _) -> pure (Left (Just a), v', (eks, p):es)
         (_, True) -> go ((eks ,p):es) M.empty eid' p' v'
         (_, False) -> pure (Right (eid', p'), v', (eks, p):es)
 
@@ -442,7 +455,7 @@ pool f = local $ \e -> go e $ mconcat
   ]
   where
     go e k = do
-      (r, (k', kv)) <- fromJust (runOrr k)
+      (r, k') <- fromJust (runOrr k)
 
       case r of
         Left a -> pure a
