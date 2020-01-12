@@ -219,22 +219,14 @@ unblock m rsp@(Syn (Free (Emit _ next))) = (Syn next, True)
 
 -- and
 unblock m rsp@(Syn (Free (And p q next)))
-  = case (isPure p', isPure q') of
-      (Just a, Just b)
-        -> (Syn (next (a, b)), True)
-      _ -> (Syn (Free (And p' q' next)), up || uq)
+  = (Syn (Free (And p' q' next)), up || uq)
   where
     (p', up) = unblock m p
     (q', uq) = unblock m q
 
 -- or
 unblock m rsp@(Syn (Free (Or p q next)))
-  = case (isPure p', isPure q') of
-      (Just a, _)
-        -> (Syn (next (a, q')), True)
-      (_, Just b)
-        -> (Syn (next (b, p')), True)
-      _ -> (Syn (Free (Or p' q' next)), up || uq)
+  = (Syn (Free (Or p' q' next)), up || uq)
   where
     (p', up) = unblock m p
     (q', uq) = unblock m q

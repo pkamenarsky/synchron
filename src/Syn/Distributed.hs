@@ -59,7 +59,7 @@ newTrail notify (Syn (Free (And p q next))) = do
 
     , commit  = undefined
     }
-newTrail notify (Syn (Free (Or f p q next))) = do
+newTrail notify (Syn (Free (Or p q next))) = do
   v <- newIORef p
   pure $ Trail
     { advance = undefined
