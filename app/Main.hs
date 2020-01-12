@@ -225,6 +225,7 @@ additions = pool $ \p -> do
   spawn p addition
   spawn p addition
   spawn p addition
+  spawn p addition
   Syn.forever
   
 --------------------------------------------------------------------------------

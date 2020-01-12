@@ -13,7 +13,7 @@ newVar a f = local $ \e -> go a e $ mconcat
   ]
   where
     go a e ks = do
-      (r, ks') <- unsafeRunOrr ks
+      (r, _, ks') <- unsafeRunOrr ks
       case r of
         Left b -> pure b
         Right (Left a') -> go a' e $ mconcat

@@ -69,7 +69,7 @@ data SynF v next
   | Emit EventValue next
   | forall t a. Await (Event t a) (a -> next)
 
-  | forall a. Or (Syn v a) (Syn v a) ((a, Syn v a) -> next)
+  | forall a. Or (Syn v a) (Syn v a) ((a, (Syn v a, V v)) -> next)
   | forall a b. And (Syn v a) (Syn v b) ((a, b) -> next)
 
   | forall a b. And_T (Trail v a) (Trail v b) ((a, b) -> next)
@@ -125,6 +125,9 @@ orr [a] = a
 orr [a, b] = fmap fst $ Syn $ liftF (Or a b id)
 orr (a:as) = orr [a, orr as]
 
+orr' :: Monoid v => Syn v a -> Syn v a -> Syn v (a, (Syn v a, V v))
+orr' a b = Syn $ liftF (Or a b id)
+
 andd' :: [Syn v a] -> Syn v [a]
 andd' [a] = (:[]) <$> a
 andd' [a, b] = do
@@ -160,14 +163,14 @@ instance Andd (Syn v a, Syn v b, Syn v c, Syn v d, Syn v e, Syn v f) (Syn v (a, 
 
 --------------------------------------------------------------------------------
 
-data Orr v a = Orr (Syn v (a, Orr v a)) | D
+data Orr v a = Orr (Syn v (a, V v, Orr v a)) | D
   deriving (Functor, Show)
 
-runOrr :: Orr v a -> Maybe (Syn v (a, Orr v a))
+runOrr :: Orr v a -> Maybe (Syn v (a, V v, Orr v a))
 runOrr (Orr o) = Just o
 runOrr D = Nothing
 
-unsafeRunOrr :: Orr v a -> Syn v (a, Orr v a)
+unsafeRunOrr :: Orr v a -> Syn v (a, V v, Orr v a)
 unsafeRunOrr (Orr o) = o
 unsafeRunOrr D = error "unsafeRunOrr: D"
 
@@ -175,14 +178,14 @@ instance (Typeable v, Monoid v) => Semigroup (Orr v a) where
   D <> q = q
   p <> D = p
   Orr p <> Orr q = Orr $ do
-    ((a, m), n) <- Syn (liftF (Or p q id))
-    pure (a, m <> Orr n)
+    ((a, v, m), (n, v')) <- Syn (liftF (Or p q id))
+    pure (a, V (foldV v), (m <> Orr n))
 
 instance (Typeable v, Monoid v) => Monoid (Orr v a) where
   mempty = D
 
 liftOrr :: Syn v a -> Orr v a
-liftOrr p = Orr ((,D) <$> p)
+liftOrr p = Orr ((,E,D) <$> p)
 
 -- isPure ----------------------------------------------------------------------
 
@@ -350,9 +353,9 @@ advance eid ios rsp@(Syn (Free (And p q next))) v
 advance eid ios rsp@(Syn (Free (Or p q next))) v@(P pv qv)
   = case (isPure p', isPure q') of
       (Just a, _)
-        -> advance eid' ios' (Syn (next (a, q'))) (V (foldV pv'))
+        -> advance eid' ios' (Syn (next (a, (q', qv')))) (V (foldV pv'))
       (_, Just b)
-        -> advance eid'' ios'' (Syn (next (b, p'))) (V (foldV qv'))
+        -> advance eid'' ios'' (Syn (next (b, (p', pv')))) (V (foldV qv'))
       _ -> (eid'', ios'', Syn (Free (Or p' q' next)), v')
   where
     v' = case (pv', qv') of
@@ -365,9 +368,9 @@ advance eid ios rsp@(Syn (Free (Or p q next))) v@(P pv qv)
 advance eid ios rsp@(Syn (Free (Or p q next))) v
   = case (isPure p', isPure q') of
       (Just a, _)
-        -> advance eid' ios' (Syn (next (a, q'))) (V (foldV pv'))
+        -> advance eid' ios' (Syn (next (a, (q', qv')))) (V (foldV pv'))
       (_, Just b)
-        -> advance eid'' ios'' (Syn (next (b, p'))) (V (foldV qv'))
+        -> advance eid'' ios'' (Syn (next (b, (p', pv')))) (V (foldV qv'))
       _ -> (eid'', ios'', Syn (Free (Or p' q' next)), v')
   where
     v' = case (pv', qv') of
@@ -421,8 +424,8 @@ stepAll = go []
     go es m eid p v = do
       (eid', p', v', eks, u) <- stepOnce m eid p v
 
-      traceIO ("*** " <> show p)
-      traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m) <> ", U: " <> show u)
+      -- traceIO ("*** " <> show p)
+      -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m) <> ", U: " <> show u)
 
       case (isPure p', u) of
         (Just a, _) -> pure (Left (Just a), v', (eks, p):es)
@@ -441,22 +444,22 @@ exhaust p = do
 data Pool v = Pool (Event Internal (Syn v ()))
 
 pool :: Typeable v => Monoid v => (Pool v -> Syn v a) -> Syn v a
-pool f = local $ \e -> go e $ mconcat
+pool f = local $ \e -> go e E $ mconcat
   [ liftOrr (Right . Left <$> await e)
   , liftOrr (Left <$> f (Pool e))
   ]
   where
-    go e k = do
-      (r, k') <- fromJust (runOrr k)
+    go e v k = do
+      (r, v', k') <- orr [ fromJust (runOrr k), view (foldV v) >> forever ]
 
       case r of
         Left a -> pure a
-        Right (Left p)  -> go e $ mconcat
+        Right (Left p)  -> go e v' $ mconcat
           [ liftOrr (Right . Left <$> await e)
           , liftOrr (fmap (Right . Right) p)
           , k'
           ]
-        Right (Right _) -> go e k'
+        Right (Right _) -> go e v' k'
 
 spawn :: Pool v -> Syn v () -> Syn v ()
 spawn (Pool e) p = do
