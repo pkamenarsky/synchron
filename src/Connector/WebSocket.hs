@@ -85,13 +85,13 @@ websocket port options k = Syn.event $ \e -> do
 
     backupApp _ respond = respond $ responseLBS status400 [] "Not a WebSocket request"
 
-accept :: WebSocketServer s -> Syn.Syn v WebSocket
+accept :: Monoid v => WebSocketServer s -> Syn.Syn v WebSocket
 accept (WebSocketServer e) = Syn.await e
 
-receive :: WebSocket -> Syn.Syn v DataMessage
+receive :: Monoid v => WebSocket -> Syn.Syn v DataMessage
 receive (WebSocket e _) = Syn.await e
 
-send :: WebSocket -> DataMessage -> Syn.Syn v ()
+send :: Monoid v => WebSocket -> DataMessage -> Syn.Syn v ()
 send (WebSocket _ v) m = Syn.async $ atomically $ do
   outCh <- readTVar v
   writeTChan outCh m

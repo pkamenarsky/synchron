@@ -144,21 +144,21 @@ main = pure ()
 -- Replica ---------------------------------------------------------------------
 
 runReplica p = do
-  ctx   <- newMVar (Just (0, p, E))
+  ctx   <- newMVar (Just (0, p))
   block <- newMVar ()
   Warp.run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> do
     takeMVar block
     modifyMVar ctx $ \ctx' -> case ctx' of
-      Just (eid, p, v) -> do
-        r <- stepAll mempty eid p v
+      Just (eid, p) -> do
+        r <- stepAll mempty eid p
         case r of
           (Left _, v', _) -> do
             -- print (show (runHTML (foldV v') (Context ctx)))
-            pure (Nothing, Just (runHTML (foldV v') (Context ctx), (), \_ -> pure (pure ())))
+            pure (Nothing, Just (runHTML v' (Context ctx), (), \_ -> pure (pure ())))
           (Right (eid', p'), v', _) -> do
-            let html = runHTML (foldV v') (Context ctx)
+            let html = runHTML v' (Context ctx)
             pure
-              ( Just (eid', p', v')
+              ( Just (eid', p')
               , Just (html, (), \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))
               )
       Nothing -> pure (Nothing, Nothing)
@@ -176,21 +176,21 @@ toHTML (Container props children) = HTML $ \ctx ->
   where
     toProps ctx (Click e) = ("onClick", AEvent $ \de -> void $ push ctx e de)
 
-abstractConter :: Event Internal Int -> Int -> Syn Container a
-abstractConter o x = local $ \e -> local $ \f -> do
-  view (Container [Click e] [Number x])
-  await e
-  view (Container [Click f] [Label "You clicked!"])
-  await f
-  emit o (x + 1)
-  abstractConter o (x + 1)
-
-realCounter x = local $ \y -> do
-  void $ andd (mapView toHTML (abstractConter y x), label x y)
-  where
-    label x y = do
-      Right x' <- orr [ Left <$> text (T.pack $ show x), Right <$> await y ]
-      label x' y
+-- abstractConter :: Event Internal Int -> Int -> Syn Container a
+-- abstractConter o x = local $ \e -> local $ \f -> do
+--   view (Container [Click e] [Number x])
+--   await e
+--   view (Container [Click f] [Label "You clicked!"])
+--   await f
+--   emit o (x + 1)
+--   abstractConter o (x + 1)
+-- 
+-- realCounter x = local $ \y -> do
+--   void $ andd (mapView toHTML (abstractConter y x), label x y)
+--   where
+--     label x y = do
+--       Right x' <- orr [ Left <$> text (T.pack $ show x), Right <$> await y ]
+--       label x' y
 
 counter x = do
   div [ onClick ] [ text (T.pack $ show x) ]

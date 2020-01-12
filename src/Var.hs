@@ -25,12 +25,12 @@ newVar a f = local $ \e -> go a e $ mconcat
           , Right <$> liftOrr (await e)
           ]
 
-readVar :: Var a -> Syn v a
+readVar :: Monoid v => Var a -> Syn v a
 readVar (Var e) = local $ \c -> do
   emit e (Right c)
   await c
 
-putVar :: Var a -> a -> Syn v ()
+putVar :: Monoid v => Var a -> a -> Syn v ()
 putVar (Var e) a = emit e (Left a)
 
 -- testVars = newVar 5 $ \v -> do
