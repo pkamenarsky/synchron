@@ -67,7 +67,7 @@ data SynF v next
   | Emit EventValue next
   | forall t a. Await (Event t a) (a -> next)
 
-  | forall a u. (Typeable u, Monoid u) => Or (u -> v) (Syn u a) (Syn u a) ((a, Syn u a) -> next)
+  | forall a u. (Typeable u, Monoid u) => Or (u -> v) (Syn u a) (Syn u a) ((a, (Syn u a, V u)) -> next)
   | forall a b. And (Syn v a) (Syn v b) ((a, b) -> next)
 
   | forall a b. And_T (Trail v a) (Trail v b) ((a, b) -> next)
@@ -95,6 +95,7 @@ instance Show (Syn v a) where
   show (Syn (Free (Or _ a b _))) = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
   show (Syn (Free (And a b _))) = "And [" <> show a <> ", " <> show b <> "]"
 
+-- TODO: map only the outermost layer! (i.e. don't descent into Or/And)
 mapView :: (u -> v) -> Syn u a -> Syn v a
 mapView f (Syn m) = Syn (hoistFree (go f) m)
   where
@@ -166,14 +167,14 @@ instance Andd (Syn v a, Syn v b, Syn v c, Syn v d, Syn v e, Syn v f) (Syn v (a, 
 
 --------------------------------------------------------------------------------
 
-data Orr v a = Orr (Syn v (a, Orr v a)) | D
+data Orr v a = Orr (Syn v (a, (Orr v a, V v))) | D
   deriving (Functor, Show)
 
-runOrr :: Orr v a -> Maybe (Syn v (a, Orr v a))
+runOrr :: Orr v a -> Maybe (Syn v (a, (Orr v a, V v)))
 runOrr (Orr o) = Just o
 runOrr D = Nothing
 
-unsafeRunOrr :: Orr v a -> Syn v (a, Orr v a)
+unsafeRunOrr :: Orr v a -> Syn v (a, (Orr v a, V v))
 unsafeRunOrr (Orr o) = o
 unsafeRunOrr D = error "unsafeRunOrr: D"
 
@@ -181,14 +182,14 @@ instance (Typeable v, Monoid v) => Semigroup (Orr v a) where
   D <> q = q
   p <> D = p
   Orr p <> Orr q = Orr $ do
-    ((a, m), n) <- Syn (liftF (Or id p q id))
-    pure (a, m <> Orr n)
+    ((a, (m, v)), n) <- Syn (liftF (Or id p q id))
+    pure (a, (m <> undefined, v))
 
 instance (Typeable v, Monoid v) => Monoid (Orr v a) where
   mempty = D
 
 liftOrr :: Syn v a -> Orr v a
-liftOrr p = Orr ((,D) <$> p)
+liftOrr p = Orr ((,(D,E)) <$> p)
 
 -- unblock ---------------------------------------------------------------------
 
@@ -226,9 +227,9 @@ unblock m rsp@(Syn (Free (And p q next)))
 unblock m rsp@(Syn (Free (Or u p q next)))
   = case (p', q') of
       (Syn (Pure a), _)
-        -> (Syn (next (a, q')), True)
+        -> (Syn (next (a, (q', undefined))), True)
       (_, Syn (Pure b))
-        -> (Syn (next (b, p')), True)
+        -> (Syn (next (b, (p', undefined))), True)
       _ -> (Syn (Free (Or u p' q' next)), up || uq)
   where
     (p', up) = unblock m p
@@ -239,6 +240,8 @@ unblock m rsp@(Syn (Free (Or u p q next)))
 data V v = E | V v | forall u. (Monoid u, Typeable u) => P (u -> v) (V u) (V u) | forall u. (Monoid u, Typeable u) => U (u -> v) (V u)
 
 deriving instance Functor V
+
+instance Semigroup (V v) where
 
 foldV :: Monoid v => V v -> v
 foldV E = mempty
@@ -335,9 +338,9 @@ advance eid ios (Syn (Free (Or (u :: u -> v) p q next))) v@(P (u' :: u' -> v') p
         
     in case (p', q') of
       (Syn (Pure a), _)
-        -> advance eid' ios' (Syn (next (a, q'))) (U u pv')
+        -> advance eid' ios' (Syn (next (a, (q', pv')))) (U u pv')
       (_, Syn (Pure b))
-        -> advance eid'' ios'' (Syn (next (b, p'))) (U u qv')
+        -> advance eid'' ios'' (Syn (next (b, (p', qv')))) (U u qv')
       _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), v')
   Nothing -> error "NOT REFL"
 
@@ -359,9 +362,9 @@ advance eid ios (Syn (Free (Or (u :: u -> v) p q next))) v@(P (u' :: u' -> v') p
 advance eid ios rsp@(Syn (Free (Or u p q next))) v
   = case (p', q') of
       (Syn (Pure a), _)
-        -> advance eid' ios' (Syn (next (a, q'))) (U u pv')
+        -> advance eid' ios' (Syn (next (a, (q', pv')))) (U u pv')
       (_, Syn (Pure b))
-        -> advance eid'' ios'' (Syn (next (b, p'))) (U u qv')
+        -> advance eid'' ios'' (Syn (next (b, (p', qv')))) (U u qv')
       _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), v')
   where
     v' = case (pv', qv') of
@@ -439,7 +442,7 @@ pool f = local $ \e -> go e $ mconcat
   ]
   where
     go e k = do
-      (r, k') <- fromJust (runOrr k)
+      (r, (k', kv)) <- fromJust (runOrr k)
 
       case r of
         Left a -> pure a
