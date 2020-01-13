@@ -49,8 +49,10 @@ instance Show EventValue where
   show (EventValue e _) = show e
 
 data Trail v a = Trail
-  { notify :: ([EventId], M.Map EventId EventValue) -> IO ()
-  , p      :: MVar (Syn v a)
+  { trNotify  :: M.Map EventId EventValue -> IO ()
+  , trAdvance :: IO (Maybe a, V v)
+  , trGather  :: IO (M.Map EventId EventValue)
+  , trUnblock :: M.Map EventId EventValue -> IO Bool
   }
 
 data SynF v next
@@ -494,3 +496,27 @@ push (Context v) e@(Event ei) a = modifyMVar v $ \v -> case v of
 
 event :: Application v (Event External a) r
 event app = newEvent >>= app
+
+--------------------------------------------------------------------------------
+
+newTrail :: Monoid v => Context v a -> IO (Trail v a)
+newTrail (Context ctx) = do
+  pure $ Trail
+    { trNotify  = undefined
+    , trAdvance = modifyMVar ctx $ \ctx' -> case ctx' of
+        Nothing -> pure (Nothing, (Nothing, E))
+        Just (eid, p, v) -> do
+          let (eid', ios, p', v') = advance eid [] p v
+          sequence_ ios
+          case p' of
+            Syn (Pure a) -> pure (Just (eid', p', v'), (Just a, v'))
+            _ -> pure (Just (eid', p', v'), (Nothing, v'))
+    , trGather  = modifyMVar ctx $ \ctx' -> case ctx' of
+        Nothing -> pure (Nothing, M.empty)
+        Just (_, p, _) -> pure (ctx', gather p)
+    , trUnblock = \m -> modifyMVar ctx $ \ctx' -> case ctx' of
+        Nothing -> pure (Nothing, False)
+        Just (eid, p, v) -> do
+          let (p', u) = unblock m p
+          pure (Just (eid, p', v), u)
+    }
