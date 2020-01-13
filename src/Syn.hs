@@ -192,12 +192,6 @@ instance (Typeable v, Monoid v) => Monoid (Orr v a) where
 liftOrr :: Syn v a -> Orr v a
 liftOrr p = Orr ((,E,D) <$> p)
 
--- isPure ----------------------------------------------------------------------
-
-isPure :: Syn v a -> Maybe a
-isPure (Syn (Pure a)) = Just a
-isPure (Syn _) = Nothing
-
 -- unblock ---------------------------------------------------------------------
 
 unblock
@@ -348,9 +342,8 @@ advance eid ios (Syn (Free (Async io next))) v
 
 -- and
 advance eid ios rsp@(Syn (Free (And p q next))) v
-  = case (isPure p', isPure q') of
-      (Just a, Just b)
-           -- TODO: should we foldV here? or use parallel Is?
+  = case (p', q') of
+      (Syn (Pure a), Syn (Pure b))
         -> advance eid'' ios'' (Syn (next (a, b))) (V (foldV pv' <> foldV qv'))
       _ -> (eid'', ios'', Syn (Free (And p' q' next)), v')
   where
@@ -366,10 +359,10 @@ advance eid ios rsp@(Syn (Free (And p q next))) v
     (eid'', ios'', q', qv') = advance (eid' + 1) ios' q qv
 
 advance eid ios rsp@(Syn (Free (Or p q next))) v
-  = case (isPure p', isPure q') of
-      (Just a, _)
-        -> advance eid' ios' (Syn (next (a, (q', qv')))) (V (foldV pv'))
-      (_, Just b)
+  = case (p', q') of
+      (Syn (Pure a), _)
+        -> advance eid'' ios'' (Syn (next (a, (q', qv')))) (V (foldV pv'))
+      (_, Syn (Pure b))
         -> advance eid'' ios'' (Syn (next (b, (p', pv')))) (V (foldV qv'))
       _ -> (eid'', ios'', Syn (Free (Or p' q' next)), v')
   where
@@ -452,8 +445,8 @@ advanceIO eid ios rsp@(Syn (Free (And p q next))) v = do
              (E, E) -> v
              _ -> P pv' qv'
 
-  case (isPure p', isPure q') of
-    (Just a, Just b)
+  case (p', q') of
+    (Syn (Pure a), Syn (Pure b))
       -> advanceIO eid'' ios'' (Syn (next (a, b))) (V (foldV pv' <> foldV qv'))
     _ -> pure (eid'', ios'', Syn (Free (And p' q' next)), v')
   where
@@ -471,10 +464,10 @@ advanceIO eid ios rsp@(Syn (Free (Or p q next))) v = do
              (E, E) -> v
              (_, _) -> P pv' qv'
 
-  case (isPure p', isPure q') of
-    (Just a, _)
+  case (p', q') of
+    (Syn (Pure a), _)
       -> advanceIO eid' ios' (Syn (next (a, (q', qv')))) (V (foldV pv'))
-    (_, Just b)
+    (_, Syn (Pure b))
       -> advanceIO eid'' ios'' (Syn (next (b, (p', pv')))) (V (foldV qv'))
     _ -> pure (eid'', ios'', Syn (Free (Or p' q' next)), v')
   where
@@ -558,8 +551,8 @@ stepAll = go []
       -- traceIO ("*** " <> show p)
       -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m) <> ", U: " <> show u)
 
-      case (isPure p', u) of
-        (Just a, _) -> pure (Left (Just a), v', (eks, p):es)
+      case (p', u) of
+        (Syn (Pure a), _) -> pure (Left (Just a), v', (eks, p):es)
         (_, True) -> go ((eks ,p):es) M.empty eid' p' v'
         (_, False) -> pure (Right (eid', p'), v', (eks, p):es)
 
