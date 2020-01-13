@@ -314,59 +314,6 @@ advance eid ios rsp@(Syn (Free (And p q next))) v
     (eid', ios', p', pv') = advance (eid + 1) ios p pv
     (eid'', ios'', q', qv') = advance (eid' + 1) ios' q qv
 
--- or
--- advance eid ios rsp@(Syn (Free (Or u p q next))) v
---   = case (p', q') of
---       (Syn (Pure a), _)
---         -> advance eid' ios' (Syn (next (a, q'))) (u <$> V id (foldV pv'))
---       (_, Syn (Pure b))
---         -> advance eid'' ios'' (Syn (next (b, p'))) (u <$> V id (foldV qv'))
---       _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), unsafeCoerce v')
---   where
---     v' = case (pv', qv') of
---       (E, E) -> undefined -- v
---       (_, _) -> P pv' qv'
--- 
---     (pv, qv) = case v of
---       P pv qv -> (pv, qv)
---       _ -> (E, E)
--- 
---     (eid', ios', p', pv') = advance (eid + 1) ios p (_ pv)
---     (eid'', ios'', q', qv') = advance (eid' + 1) ios' q qv
-
--- advance :: Int -> [IO ()] -> Syn v a -> V v -> (Int, [IO ()], Syn v a, V v)
--- advance eid ios (Syn (Free (Or (u :: u -> v) p q next))) v@(P (u' :: u' -> v') pv qv) = case (testEquality (typeRep :: TypeRep (u -> v)) (typeRep :: TypeRep (u' -> v'))) of
---   Just Refl ->
---     let (eid', ios', p', pv') = advance (eid + 1) ios p pv
---         (eid'', ios'', q', qv') = advance (eid' + 1) ios' q qv
--- 
---         v' = case (pv', qv') of
---           (E, E) -> v
---           (_, _) -> P u pv' qv'
---         
---     in case (p', q') of
---       (Syn (Pure a), _)
---         -> advance eid' ios' (Syn (next (a, (q', pv')))) (U u pv')
---       (_, Syn (Pure b))
---         -> advance eid'' ios'' (Syn (next (b, (p', qv')))) (U u qv')
---       _ -> (eid'', ios'', Syn (Free (Or u p' q' next)), v')
---   Nothing -> error "NOT REFL"
-
-advance eid ios rsp@(Syn (Free (Or p q next))) v@(P pv qv)
-  = case (isPure p', isPure q') of
-      (Just a, _)
-        -> advance eid' ios' (Syn (next (a, (q', qv')))) (V (foldV pv'))
-      (_, Just b)
-        -> advance eid'' ios'' (Syn (next (b, (p', pv')))) (V (foldV qv'))
-      _ -> (eid'', ios'', Syn (Free (Or p' q' next)), v')
-  where
-    v' = case (pv', qv') of
-      (E, E) -> v
-      (_, _) -> P pv' qv'
-
-    (eid', ios', p', pv') = advance (eid + 1) ios p pv
-    (eid'', ios'', q', qv') = advance (eid' + 1) ios' q qv
-
 advance eid ios rsp@(Syn (Free (Or p q next))) v
   = case (isPure p', isPure q') of
       (Just a, _)
@@ -375,12 +322,16 @@ advance eid ios rsp@(Syn (Free (Or p q next))) v
         -> advance eid'' ios'' (Syn (next (b, (p', pv')))) (V (foldV qv'))
       _ -> (eid'', ios'', Syn (Free (Or p' q' next)), v')
   where
+    (pv, qv) = case v of
+      P pv qv -> (pv, qv)
+      _ -> (E, E)
+
     v' = case (pv', qv') of
       (E, E) -> v
       (_, _) -> P pv' qv'
 
-    (eid', ios', p', pv') = advance (eid + 1) ios p E
-    (eid'', ios'', q', qv') = advance (eid' + 1) ios' q E
+    (eid', ios', p', pv') = advance (eid + 1) ios p pv
+    (eid'', ios'', q', qv') = advance (eid' + 1) ios' q qv
 
 -- gather ----------------------------------------------------------------------
 
