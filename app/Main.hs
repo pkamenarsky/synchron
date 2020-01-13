@@ -247,3 +247,7 @@ shared = local $ \end -> local $ \st -> pool $ \p -> do
       a <- await st
       async (print a)
       get st
+
+background = div
+  [ style [("backgroundColor", "#d4dde0"), ("width", "100%"), ("height", "100%"), ("padding", "0px"), ("margin", "0px")] ]
+  [ div [ style [("fontFamily", "monospace"), ("fontWeight", "500"), ("color", "#4b5060")] ] [ text "Hello" ] ]
