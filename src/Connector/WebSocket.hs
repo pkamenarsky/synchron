@@ -48,7 +48,7 @@ websocket
   -> ConnectionOptions
   -> (forall s. WebSocketServer s -> IO (Syn.Context v a))
   -> IO (Syn.Context v a)
-websocket port options k = Syn.event $ \e -> do
+websocket port options k = Syn.event undefined $ \e -> do
   ctx <- k (WebSocketServer e)
   forkIO (go ctx e)
 
@@ -60,7 +60,7 @@ websocket port options k = Syn.event $ \e -> do
     wsApp ctx e pending = do
       conn  <- acceptRequest pending
 
-      inCh  <- Syn.newEvent
+      inCh  <- Syn.newEvent undefined
       outCh <- newTChanIO
 
       forkPingThread conn 30

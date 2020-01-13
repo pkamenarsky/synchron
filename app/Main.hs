@@ -104,7 +104,7 @@ import Prelude hiding (div)
 testWebsockets :: IO (Context () ())
 testWebsockets =
   WS.websocket 3922 defaultConnectionOptions $ \wss -> do
-  WS.websocket 3923 defaultConnectionOptions $ \wss2 -> run $ do
+  WS.websocket 3923 defaultConnectionOptions $ \wss2 -> run (NodeId 0) $ do
     (ws, ws2) <- andd (WS.accept wss, WS.accept wss2)
 
     d <- WS.receive ws
@@ -119,7 +119,7 @@ testWebsockets =
 testChat :: IO (Context () ())
 testChat
   = WS.websocket 3922 defaultConnectionOptions $ \wss ->
-    run $
+    run (NodeId 0) $
     pool $ \p ->
     local $ \msg -> do
       acceptConn p wss msg
@@ -144,19 +144,20 @@ main = pure ()
 -- Replica ---------------------------------------------------------------------
 
 runReplica p = do
+  let nid = NodeId 0
   ctx   <- newMVar (Just (0, p, E))
   block <- newMVar ()
   Warp.run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> do
     takeMVar block
     modifyMVar ctx $ \ctx' -> case ctx' of
       Just (eid, p, v) -> do
-        r <- stepAll mempty eid p v
+        r <- stepAll mempty nid eid p v
         case r of
           (Left _, v', _) -> do
             -- print (show (runHTML (foldV v') (Context ctx)))
-            pure (Nothing, Just (runHTML (foldV v') (Context ctx), (), \_ -> pure (pure ())))
+            pure (Nothing, Just (runHTML (foldV v') (Context nid ctx), (), \_ -> pure (pure ())))
           (Right (eid', p'), v', _) -> do
-            let html = runHTML (foldV v') (Context ctx)
+            let html = runHTML (foldV v') (Context nid ctx)
             pure
               ( Just (eid', p', v')
               , Just (html, (), \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))

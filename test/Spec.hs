@@ -7,6 +7,9 @@ import Test.Tasty.HUnit
 import Syn hiding (emit, await)
 import qualified Syn
 
+localNid :: NodeId
+localNid = NodeId 0
+
 emit :: Event Internal a -> a -> Syn () ()
 emit = Syn.emit
 
@@ -137,17 +140,17 @@ p10 = local $ \i -> local $ \o -> pool $ \p -> do
       go i o (x + a) (n - 1)
 
 p11 = do
-  (a, ks) <- fromJust $ runOrr $ mconcat
+  (a, _, ks) <- fromJust $ runOrr $ mconcat
     [ liftOrr (pure "a")
     , liftOrr (pure "b")
     , liftOrr (pure "c")
     ]
-  (b, ks') <- fromJust $ runOrr ks
-  (c, ks'') <- fromJust $ runOrr ks'
+  (b, _, ks') <- fromJust $ runOrr ks
+  (c, _, ks'') <- fromJust $ runOrr ks'
   pure (a, b, c)
 
-e12 result = event $ \e -> do
-  ctx <- run $ do
+e12 result = event localNid $ \e -> do
+  ctx <- run localNid $ do
     a <- andd' [ await e, await e ]
     async (result a)
 
@@ -155,8 +158,8 @@ e12 result = event $ \e -> do
 
   pure ctx
 
-e13 result = event $ \e -> do
-  ctx <- run $ local $ \f -> do
+e13 result = event localNid $ \e -> do
+  ctx <- run localNid $ local $ \f -> do
     a <- andd (await e, await e, await e, emit f "F")
     async (result a)
 
@@ -164,8 +167,8 @@ e13 result = event $ \e -> do
 
   pure ctx
 
-e14 result = event $ \e -> do
-  ctx <- run $ local $ \f -> do
+e14 result = event localNid $ \e -> do
+  ctx <- run localNid $ local $ \f -> do
     a <- andd (await e, await e, (,) <$> await f <*> await f, emit f "F" >> emit f "F")
     async (result a)
 
@@ -176,7 +179,7 @@ e14 result = event $ \e -> do
 --------------------------------------------------------------------------------
 
 test :: (Show a, Eq a) => Syn () a -> a -> Assertion
-test f a = ((fromJust . fst) <$> exhaust f) >>= (@?= a)
+test f a = ((fromJust . fst) <$> exhaust localNid f) >>= (@?= a)
 
 testE :: (Show a, Eq a) => ((a -> IO ()) -> IO (Context () b)) -> a -> Assertion
 testE f a = do
