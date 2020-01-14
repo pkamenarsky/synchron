@@ -56,20 +56,20 @@ zipPadF as bs = zip
   (take (max 0 (length bs - length as)) (repeat Nothing) <> map Just as)
   (take (max 0 (length as - length bs)) (repeat Nothing) <> map Just bs)
 
-printTrails :: [GSyn] -> [String]
-printTrails = concatMap (fst3 . go 0)
+showTrail :: GSyn -> [String]
+showTrail = fst3 . go
   where
     fst3 (a, b, c) = a
 
     r c x = take x (repeat c)
     ss = r ' '
 
-    go :: Int -> GSyn -> ([String], Int, Int)
-    go x GEmit = ([ss x <> "E"], 1, 0)
-    go x GAwait = ([ss x <> "A"], 1, 0)
-    go x GDone = ([ss x <> "D"], 1, 0)
-    go x GForever = ([ss x <> "F"], 1, 0)
-    go x (GBin op p q) =
+    go :: GSyn -> ([String], Int, Int)
+    go GEmit = (["E"], 1, 0)
+    go GAwait = (["A"], 1, 0)
+    go GDone = (["D"], 1, 0)
+    go GForever = (["F"], 1, 0)
+    go (GBin op p q) =
       ( header <> subheader <> lines
       , pw + qw + 1
       , length header + length subheader
@@ -79,13 +79,12 @@ printTrails = concatMap (fst3 . go 0)
         top GOr = "||"
 
         header =
-          [ ss x <> top op <> ss (pw + qw + 1 - 2)
-          , ss x <> r '-' (pw + qw + 1)
+          [ top op <> ss (pw + qw + 1 - 2)
+          , r '-' (pw + qw + 1)
           ]
         subheader =
           [ mconcat
-             [ ss x
-             , case ph of
+             [ case ph of
                  Nothing -> ss pw
                  Just t  -> t
              , " "
@@ -97,8 +96,7 @@ printTrails = concatMap (fst3 . go 0)
           ]
         lines =
           [ mconcat
-             [ ss x
-             , case ph of
+             [ case ph of
                  Nothing -> ss pw
                  Just t  -> t
              , " "
@@ -108,14 +106,28 @@ printTrails = concatMap (fst3 . go 0)
              ]
           | (ph, qh) <- zipPadF (drop ph pt) (drop qh qt)
           ]
-        (pt, pw, ph) = go 0 p
-        (qt, qw, qh) = go 0 p
+        (pt, pw, ph) = go p
+        (qt, qw, qh) = go q
+
+showProgram :: [GSyn] -> [String]
+showProgram = concat . go []
+  where
+    go u [] = []
+    go u (p:ps) = t':go t ps
+      where
+        t = showTrail p
+        t' = strip u t
+
+    strip [] bs = bs
+    strip (a:as) (b:bs)
+      | a == b = strip as bs
+      | otherwise = (b:bs)
 
 p4 :: Syn () _
 p4 = Syn.local $ \e -> Syn.local $ \f -> do
   a@((_, _), _, (_, _)) <- Syn.andd
          ( Syn.andd (Syn.await e, Syn.emit f "F")
-         , Syn.await f
+         , Syn.orr [ Syn.await f, Syn.forever ]
          , Syn.andd (pure "_" :: Syn () String, Syn.await f >> Syn.emit e "E")
          )
   pure a
