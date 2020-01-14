@@ -29,13 +29,35 @@ data GSyn
   | GBin BinOp GSyn GSyn
   deriving (Eq, Show)
 
-data TSyn t
-  = TDone t
-  | TAwait t
-  | TEmit t
-  | TForever t
-  | TBin t BinOp (TSyn t) (TSyn t)
+data TSyn
+  = TDone
+  | TAwait TSyn
+  | TEmit TSyn
+  | TForever
+  | TBin BinOp TSyn TSyn
   deriving (Eq, Show)
+
+wrapG :: GSyn -> TSyn
+wrapG GDone = TDone
+wrapG GAwait = TAwait TDone
+wrapG GEmit = TEmit TDone
+wrapG GForever = TForever
+wrapG (GBin op p q) = TBin op (wrapG p) (wrapG q)
+
+-- | Must be right folded
+match :: TSyn -> TSyn -> TSyn
+match TDone u = u
+match (TAwait t) u = TAwait (match t u)
+match (TEmit t) u = TEmit (match t u)
+match TForever _ = TForever
+match (TBin op p q) x@(TBin op' p' q')
+  | op == op' = TBin op (match p p') (match q q')
+match (TBin op p q) u = TBin op (match p u) q
+
+toTSyn :: [GSyn] -> TSyn
+toTSyn [] = error ""
+toTSyn [g] = wrapG g
+toTSyn (g:gs) = match (wrapG g) (toTSyn gs)
 
 toGSyn :: Monoid v => Syn v a -> [GSyn]
 toGSyn = go mempty 0 []
@@ -87,10 +109,15 @@ showTrail = fst3 . go
         top GAnd = "∧"
         top GOr = "∨"
 
+        header' =
+          [ top op <> " " <> r '—' (pw + qw + 1 - 2)
+          ]
+
         header =
           [ top op <> ss (pw + qw + 1 - 1)
           , r '—' (pw + qw + 1)
           ]
+
         subheader =
           [ mconcat
              [ case ph of
@@ -103,6 +130,7 @@ showTrail = fst3 . go
              ]
           | (ph, qh) <- zipPadF (take ph pt) (take qh qt)
           ]
+
         lines =
           [ mconcat
              [ case ph of
@@ -132,46 +160,6 @@ showProgram = concat . go []
       | a == b = strip as bs
       | otherwise = (b:bs)
 
-untag :: TSyn t -> t
-untag (TDone t) = t
-untag (TAwait t) = t
-untag (TEmit t) = t
-untag (TForever t) = t
-untag (TBin t _ _ _) = t
-
-liftGSyn :: GSyn -> TSyn Int
-liftGSyn GDone = TDone 1
-liftGSyn GAwait = TAwait 1
-liftGSyn GEmit = TEmit 1
-liftGSyn GForever = TForever 1
-liftGSyn (GBin op p q) = TBin (untag p' + 1 + untag q') op p' q'
-  where
-    p' = liftGSyn p
-    q' = liftGSyn q
-
-matchMax :: [GSyn] -> [TSyn Int]
-matchMax [] = []
-matchMax (x:xs) = case (g, gs) of
-  (TDone t, gs) -> TDone (max t (thead gs)):gs
-  (TAwait t, gs) -> TAwait (max t (thead gs)):gs
-  (TEmit t, gs) -> TEmit (max t (thead gs)):gs
-  (TForever t, gs) -> TForever (max t (thead gs)):gs
-  (TBin t op p q, gs) -> TForever (max t (thead gs)):gs
-  where
-    thead (x:_) = untag x
-    thead [] = 0
-
-    g = liftGSyn  x
-    gs = matchMax xs
-
-data T = T (TSyn T) | D
-
-match :: GSyn -> [GSyn] -> T
-match GAwait (g:gs) = T (TAwait (match g gs))
-match GAwait [] = T (TAwait D)
-
-match (GBin op p q) (g@(GBin op' p' q'):gs) = T (TBin (match g gs) op _ _)
-
 --------------------------------------------------------------------------------
 
 p4 :: Syn () _
@@ -179,6 +167,7 @@ p4 = Syn.local $ \e -> Syn.local $ \f -> do
   a@((_, _), _, (_, _)) <- Syn.andd
          ( Syn.andd (Syn.await e, Syn.emit f "F")
          , Syn.orr [ Syn.await f, Syn.forever ]
+         -- , Syn.await f
          , Syn.andd (pure "_" :: Syn () String, Syn.await f >> Syn.emit e "E")
          )
   pure a
