@@ -59,6 +59,67 @@ toTSyn [] = error ""
 toTSyn [g] = wrapG g
 toTSyn (g:gs) = match (wrapG g) (toTSyn gs)
 
+r c x = take x (repeat c)
+ss = r ' '
+
+fst3 (a, b, c) = a
+
+showTSyn :: TSyn -> ([String], Int, Int)
+showTSyn TDone = (["◆"], 1, 0)
+showTSyn TForever = (["∞"], 1, 0)
+showTSyn (TAwait next) = (["○" <> ss (w - 1)] <> t, w, h)
+  where
+    (t, w, h) = showTSyn next
+showTSyn (TEmit next) = (["▲" <> ss (w - 1)] <> t, w, h)
+  where
+    (t, w, h) = showTSyn next
+showTSyn (TBin op p q) =
+  ( header <> subheader <> lines
+  , pw + qw + 1
+  , length header + length subheader
+  )
+  where
+    (pt, pw, ph) = showTSyn p
+    (qt, qw, qh) = showTSyn q
+
+    top GAnd = "∧"
+    top GOr = "∨"
+
+    header' =
+      [ top op <> " " <> r '—' (pw + qw + 1 - 2)
+      ]
+
+    header =
+      [ top op <> ss (pw + qw + 1 - 1)
+      , r '—' (pw + qw + 1)
+      ]
+
+    subheader =
+      [ mconcat
+         [ case ph of
+             Nothing -> ss pw
+             Just t  -> t
+         , " "
+         , case qh of
+             Nothing -> ss qw
+             Just t  -> t
+         ]
+      | (ph, qh) <- zipPadF (take ph pt) (take qh qt)
+      ]
+
+    lines =
+      [ mconcat
+         [ case ph of
+             Nothing -> ss pw
+             Just t  -> t
+         , " "
+         , case qh of
+             Nothing -> ss qw
+             Just t  -> t
+         ]
+      | (ph, qh) <- zipPadB (drop ph pt) (drop qh qt)
+      ]
+
 toGSyn :: Monoid v => Syn v a -> [GSyn]
 toGSyn = go mempty 0 []
   where
@@ -90,11 +151,6 @@ zipPadF as bs = zip
 showTrail :: GSyn -> [String]
 showTrail = fst3 . go
   where
-    fst3 (a, b, c) = a
-
-    r c x = take x (repeat c)
-    ss = r ' '
-
     go :: GSyn -> ([String], Int, Int)
     go GEmit = (["▲"], 1, 0)
     go GAwait = (["○"], 1, 0)
@@ -166,8 +222,7 @@ p4 :: Syn () _
 p4 = Syn.local $ \e -> Syn.local $ \f -> do
   a@((_, _), _, (_, _)) <- Syn.andd
          ( Syn.andd (Syn.await e, Syn.emit f "F")
-         , Syn.orr [ Syn.await f, Syn.forever ]
-         -- , Syn.await f
+         , Syn.orr [ Syn.await f >> Syn.orr [ Syn.forever, Syn.await e ], Syn.forever ]
          , Syn.andd (pure "_" :: Syn () String, Syn.await f >> Syn.emit e "E")
          )
   pure a
