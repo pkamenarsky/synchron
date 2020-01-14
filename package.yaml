@@ -32,6 +32,7 @@ dependencies:
 - transformers
 - replica
 - stm
+- svg-builder
 - text
 - wai
 - wai-websockets

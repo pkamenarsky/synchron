@@ -14,6 +14,7 @@ module Syn where
 
 import Control.Applicative
 import Control.Concurrent
+import Control.Monad.Fix (mfix)
 import Control.Monad.Fail
 import Control.Monad.Free
 
@@ -105,6 +106,9 @@ instance Show (Syn v a) where
 
 mapView :: Monoid u => (u -> v) -> Syn u a -> Syn v a
 mapView f m = Syn $ liftF (MapView f m id)
+
+remote :: IO (Trail v a) -> Syn v a
+remote trail = Syn $ liftF (Remote trail id)
 
 async :: IO () -> Syn v ()
 async io = Syn $ liftF (Async io ())
@@ -201,6 +205,9 @@ unblock
 
 -- pure
 unblock _ rsp@(Syn (Pure a)) = (rsp, False)
+
+-- local
+unblock _ rsp@(Syn (Free (Local _ _))) = (rsp, False)
 
 -- mapView
 unblock m rsp@(Syn (Free (MapView f v next))) = (Syn (Free (MapView f v' next)), b)
@@ -487,6 +494,9 @@ gather
 -- pure
 gather (Syn (Pure _)) = M.empty
 
+-- local
+gather (Syn (Free (Local _ _))) = M.empty
+
 -- mapview
 gather (Syn (Free (MapView _ m next))) = gather m
 
@@ -543,6 +553,13 @@ stepOnce m' nid eid p v = do
     (eid', ios, p', v') = advance nid eid [] p v
     m = gather p'
     (p'', u) = unblock (m' <> m) p'
+
+stepOnce' :: Monoid v => M.Map EventId EventValue -> NodeId -> Int -> Syn v a -> V v -> (Int, Syn v a, V v, M.Map EventId EventValue, [IO ()], Bool)
+stepOnce' m nid eid p v = (eid', p'', v', m', ios, u)
+  where
+    (p', u) = unblock m p
+    (eid', ios, p'', v') = advance nid eid [] p' v
+    m' = gather p''
 
 stepAll :: Monoid v => M.Map EventId EventValue -> NodeId -> Int -> Syn v a -> V v -> IO (Either (Maybe a) (Int, Syn v a), V v, [([EventId], Syn v a)])
 stepAll = go []
