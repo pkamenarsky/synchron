@@ -18,7 +18,7 @@ import qualified Syn
 
 import Debug.Trace
 
-data BinOp = GAnd | GOr deriving Show
+data BinOp = GAnd | GOr deriving (Eq, Show)
 
 data GSyn
   = GDone
@@ -26,7 +26,7 @@ data GSyn
   | GEmit
   | GForever
   | GBin BinOp GSyn GSyn
-  deriving Show
+  deriving (Eq, Show)
 
 toGSyn :: Monoid v => Syn v a -> [GSyn]
 toGSyn = go mempty 0 []
@@ -65,22 +65,22 @@ showTrail = fst3 . go
     ss = r ' '
 
     go :: GSyn -> ([String], Int, Int)
-    go GEmit = (["E"], 1, 0)
-    go GAwait = (["A"], 1, 0)
-    go GDone = (["D"], 1, 0)
-    go GForever = (["F"], 1, 0)
+    go GEmit = (["▲"], 1, 0)
+    go GAwait = (["○"], 1, 0)
+    go GDone = (["◆"], 1, 0)
+    go GForever = (["∞"], 1, 0)
     go (GBin op p q) =
       ( header <> subheader <> lines
       , pw + qw + 1
       , length header + length subheader
       )
       where
-        top GAnd = "&&"
-        top GOr = "||"
+        top GAnd = "∧"
+        top GOr = "∨"
 
         header =
-          [ top op <> ss (pw + qw + 1 - 2)
-          , r '-' (pw + qw + 1)
+          [ top op <> ss (pw + qw + 1 - 1)
+          , r '—' (pw + qw + 1)
           ]
         subheader =
           [ mconcat
@@ -122,6 +122,16 @@ showProgram = concat . go []
     strip (a:as) (b:bs)
       | a == b = strip as bs
       | otherwise = (b:bs)
+
+match :: GSyn -> GSyn -> Int
+match (GBin op p q) (GBin op' p' q')
+  | op == op' = undefined
+  | otherwise = undefined
+match _ (GBin op p q) = undefined
+match (GBin op p q) _ = undefined
+match _ _ = 1
+
+--------------------------------------------------------------------------------
 
 p4 :: Syn () _
 p4 = Syn.local $ \e -> Syn.local $ \f -> do
