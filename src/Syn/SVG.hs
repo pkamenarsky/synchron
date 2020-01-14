@@ -7,6 +7,7 @@ module Syn.SVG where
 import Control.Monad.Free
 
 import Data.List (intersperse)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Map as M
 import qualified Data.Text as T
@@ -26,6 +27,14 @@ data GSyn
   | GEmit
   | GForever
   | GBin BinOp GSyn GSyn
+  deriving (Eq, Show)
+
+data TSyn t
+  = TDone t
+  | TAwait t
+  | TEmit t
+  | TForever t
+  | TBin t BinOp (TSyn t) (TSyn t)
   deriving (Eq, Show)
 
 toGSyn :: Monoid v => Syn v a -> [GSyn]
@@ -123,13 +132,45 @@ showProgram = concat . go []
       | a == b = strip as bs
       | otherwise = (b:bs)
 
-match :: GSyn -> GSyn -> Int
-match (GBin op p q) (GBin op' p' q')
-  | op == op' = undefined
-  | otherwise = undefined
-match _ (GBin op p q) = undefined
-match (GBin op p q) _ = undefined
-match _ _ = 1
+untag :: TSyn t -> t
+untag (TDone t) = t
+untag (TAwait t) = t
+untag (TEmit t) = t
+untag (TForever t) = t
+untag (TBin t _ _ _) = t
+
+liftGSyn :: GSyn -> TSyn Int
+liftGSyn GDone = TDone 1
+liftGSyn GAwait = TAwait 1
+liftGSyn GEmit = TEmit 1
+liftGSyn GForever = TForever 1
+liftGSyn (GBin op p q) = TBin (untag p' + 1 + untag q') op p' q'
+  where
+    p' = liftGSyn p
+    q' = liftGSyn q
+
+matchMax :: [GSyn] -> [TSyn Int]
+matchMax [] = []
+matchMax (x:xs) = case (g, gs) of
+  (TDone t, gs) -> TDone (max t (thead gs)):gs
+  (TAwait t, gs) -> TAwait (max t (thead gs)):gs
+  (TEmit t, gs) -> TEmit (max t (thead gs)):gs
+  (TForever t, gs) -> TForever (max t (thead gs)):gs
+  (TBin t op p q, gs) -> TForever (max t (thead gs)):gs
+  where
+    thead (x:_) = untag x
+    thead [] = 0
+
+    g = liftGSyn  x
+    gs = matchMax xs
+
+data T = T (TSyn T) | D
+
+match :: GSyn -> [GSyn] -> T
+match GAwait (g:gs) = T (TAwait (match g gs))
+match GAwait [] = T (TAwait D)
+
+match (GBin op p q) (g@(GBin op' p' q'):gs) = T (TBin (match g gs) op _ _)
 
 --------------------------------------------------------------------------------
 
