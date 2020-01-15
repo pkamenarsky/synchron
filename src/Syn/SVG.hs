@@ -64,61 +64,59 @@ ss = r ' '
 
 fst3 (a, b, c) = a
 
-showTSyn :: TSyn -> ([String], Int, Int)
-showTSyn TDone = (["◆"], 1, 0)
-showTSyn TForever = (["∞"], 1, 0)
-showTSyn (TAwait next) = (["○" <> ss (w - 1)] <> t, w, h)
+showTSyn :: TSyn -> ([[String]], Int)
+showTSyn TDone = ([["◆"]], 1)
+showTSyn TForever = ([["∞"]], 1)
+showTSyn (TAwait next) = ([["○" <> ss (w - 1)]] <> t, w)
   where
-    (t, w, h) = showTSyn next
-showTSyn (TEmit next) = (["▲" <> ss (w - 1)] <> t, w, h)
+    (t, w) = showTSyn next
+showTSyn (TEmit next) = ([["▲" <> ss (w - 1)]] <> t, w)
   where
-    (t, w, h) = showTSyn next
+    (t, w) = showTSyn next
 showTSyn (TBin op p q) =
-  ( header <> subheader <> lines
+  ( header <> go pg qg
   , pw + qw + 1
-  , length header + length subheader
   )
   where
-    (pt, pw, ph) = showTSyn p
-    (qt, qw, qh) = showTSyn q
+    (pt, pw) = showTSyn p
+    (qt, qw) = showTSyn q
+    (pg, qg) = unzip (zipPadB pt qt)
 
     top GAnd = "∧"
     top GOr = "∨"
 
     header' =
-      [ top op <> " " <> r '—' (pw + qw + 1 - 2)
+      [ [ top op <> " " <> r '—' (pw + qw + 1 - 2)
+        ]
       ]
 
     header =
-      [ top op <> ss (pw + qw + 1 - 1)
-      , r '—' (pw + qw + 1)
+      [ [ top op <> ss (pw + qw + 1 - 1)
+        , r '—' (pw + qw + 1)
+        ]
       ]
 
-    subheader =
-      [ mconcat
-         [ case ph of
-             Nothing -> ss pw
-             Just t  -> t
-         , " "
-         , case qh of
-             Nothing -> ss qw
-             Just t  -> t
-         ]
-      | (ph, qh) <- zipPadF (take ph pt) (take qh qt)
-      ]
-
-    lines =
-      [ mconcat
-         [ case ph of
-             Nothing -> ss pw
-             Just t  -> t
-         , " "
-         , case qh of
-             Nothing -> ss qw
-             Just t  -> t
-         ]
-      | (ph, qh) <- zipPadB (drop ph pt) (drop qh qt)
-      ]
+    go :: [Maybe [String]] -> [Maybe [String]] -> [[String]]
+    -- go a b
+    --   | trace (show (a, b)) False = undefined
+    go [] _ = []
+    go _ [] = []
+    go (Just [pt]:ps) (Just [qt]:qs) = [[pt <> " " <> qt]] <> go ps qs
+    go (Just [pt]:ps) (Nothing:qs) = [[pt <> " " <> ss qw]] <> go ps qs
+    go (Nothing:ps) (Just [qt]:qs) = [[ss pw <> " " <> qt]] <> go ps qs
+    go (Just pt:ps) x@(Just [qt]:qs) = [map (<> (" " <> ss qw)) pt] <> go ps x
+    go (Just pt:ps) x@(Nothing:qs) = [map (<> (" " <> ss qw)) pt] <> go ps x
+    go x@(Just [pt]:ps) (Just qt:qs) = [map ((" " <> ss pw) <>) qt] <> go x qs
+    go x@(Nothing:ps) (Just qt:qs) = [map ((" " <> ss pw) <>) qt] <> go x qs
+    go (Just pt:ps) (Just qt:qs) = [ls] <> go ps qs
+      where
+        ls =
+          [ case t of
+              (Just a, Just b) -> a <> " " <> b
+              (Just a, Nothing) -> a <> " " <> ss qw
+              (Nothing, Just b) -> ss pw <> " " <> b
+          | t <- zipPadF pt qt
+          ]
 
 toGSyn :: Monoid v => Syn v a -> [GSyn]
 toGSyn = go mempty 0 []
