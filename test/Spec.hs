@@ -80,6 +80,15 @@ p6 = local $ \e -> local $ \f -> local $ \g -> do
     )
   pure a
 
+p6_2 = local $ \e -> local $ \f -> local $ \g -> do
+  a <- andd
+    ( andd (await e, emit f "F" >> andd (await g, await g) >> emit e "E")
+    , andd (await f, await g, await e)
+    , andd (await e, await g, await f)
+    , andd (pure "_" :: Syn () String, await f >> emit g "G")
+    )
+  pure a
+
 p7 = local $ \e -> local $ \f -> do
   andd
     ( go 0 0 e f
@@ -202,6 +211,7 @@ main = defaultMain $ testGroup "Example tests"
   , testCase "p4" $ test p4 (("E",()),"F",("_",()))
   , testCase "p5" $ test p5 (0,())
   , testCase "p6" $ test p6 (("E",()),("F","G","E"),("E","G","F"),("_",()))
+  , testCase "p6_2" $ test p6_2 (("E",()),("F","G","E"),("E","G","F"),("_",()))
   , testCase "p7" $ test p7 (20,())
   , testCase "p8" $ test p8 10
   , testCase "p9" $ test p9 18
