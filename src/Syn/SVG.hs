@@ -4,6 +4,7 @@
 
 module Syn.SVG where
 
+import Control.Monad (void)
 import Control.Monad.Free
 
 import Data.List (intersperse)
@@ -14,7 +15,7 @@ import qualified Data.Text as T
 
 import Graphics.Svg hiding (aR)
 
-import Syn (Syn (..), SynF (..))
+import Syn (Syn (..), SynF (..), Event (..), EventId (..), EventValue (..))
 import qualified Syn
 
 import Debug.Trace
@@ -23,63 +24,76 @@ data BinOp = GAnd | GOr deriving (Eq, Show)
 
 data GSyn
   = GDone
-  | GAwait
-  | GEmit
+  | GAwait Syn.EventId
+  | GEmit Syn.EventId
   | GForever
   | GBin BinOp GSyn GSyn
   deriving (Eq, Show)
 
 data TSyn
   = TDone
-  | TAwait TSyn
-  | TEmit TSyn
+  | TAwait Syn.EventId TSyn
+  | TEmit Syn.EventId TSyn
   | TForever
-  | TBin BinOp TSyn TSyn
+  | TBin BinOp TSyn TSyn TSyn
   deriving (Eq, Show)
 
 wrapG :: GSyn -> TSyn
 wrapG GDone = TDone
-wrapG GAwait = TAwait TDone
-wrapG GEmit = TEmit TDone
+wrapG (GAwait e) = TAwait e TDone
+wrapG (GEmit e) = TEmit e TDone
 wrapG GForever = TForever
-wrapG (GBin op p q) = TBin op (wrapG p) (wrapG q)
+wrapG (GBin op p q) = TBin op (wrapG p) (wrapG q) TDone
 
 -- | Must be right folded
-match :: TSyn -> TSyn -> TSyn
-match TDone u = u
-match (TAwait t) u = TAwait (match t u)
-match (TEmit t) u = TEmit (match t u)
-match TForever _ = TForever
-match (TBin op p q) x@(TBin op' p' q')
-  | op == op' = TBin op (match p p') (match q q')
-match (TBin op p q) u = TBin op (match p u) q
+match :: GSyn -> TSyn -> TSyn
+match GDone u = u
+match (GAwait e) u = TAwait e u
+match (GEmit e) u = TEmit e u
+match GForever _ = TForever
+match (GBin op p q) x@(TBin op' p' q' d')
+  | op == op' = TBin op (match p p') (match q q') d'
+match (GBin op p q) u = TBin op (match p u) (wrapG q) u
+-- match (GBin op p q) u = TBin op (wrapG p) (wrapG q) u
 
 toTSyn :: [GSyn] -> TSyn
 toTSyn [] = error ""
 toTSyn [g] = wrapG g
-toTSyn (g:gs) = match (wrapG g) (toTSyn gs)
+toTSyn (g:gs) = match g (toTSyn gs)
 
 r c x = take x (repeat c)
 ss = r ' '
 
 fst3 (a, b, c) = a
 
+color :: Int -> String -> String
+color c s = "\ESC[" <> show (31 + (c `mod` 7)) <> "m" <> s <> "\ESC[m"
+
+evColor :: EventId -> String -> String
+evColor (Internal (_, c)) = color c
+evColor (External (_, c)) = color c
+
 showTSyn :: TSyn -> ([[String]], Int)
+-- showTSyn TDone = ([["\ESC[34m◆\ESC[m"]], 1)
 showTSyn TDone = ([["◆"]], 1)
 showTSyn TForever = ([["∞"]], 1)
-showTSyn (TAwait next) = ([["○" <> ss (w - 1)]] <> t, w)
+showTSyn (TAwait e next) = ([[evColor e "○" <> ss (w - 1)]] <> t, w)
   where
     (t, w) = showTSyn next
-showTSyn (TEmit next) = ([["▲" <> ss (w - 1)]] <> t, w)
+showTSyn (TEmit e next) = ([[evColor e "▲" <> ss (w - 1)]] <> t, w)
   where
     (t, w) = showTSyn next
-showTSyn (TBin op p q) =
-  ( header <> go pg qg
+showTSyn (TBin op p q d) =
+  ( header <> go pg qg -- <> if d == TDone then [] else dt
   , pw + qw + 1
   )
   where
     (pt, pw) = showTSyn p
-    (qt, qw) = showTSyn q
+    (qt, qw') = showTSyn q
+    (dt, dw) = showTSyn d
+
+    qw = (max (pw + 1 + qw') dw) - pw - 1
+
     (pg, qg) = unzip (zipPadB pt qt)
 
     top GAnd = "∧"
@@ -118,6 +132,11 @@ showTSyn (TBin op p q) =
           | t <- zipPadF pt qt
           ]
 
+zipLines :: [[String]] -> [[String]] -> [(Maybe [String], Maybe [String])]
+zipLines ([a]:as) ([b]:bs) = (Just [a], Just [b]):zipLines as bs
+zipLines ([a]:as) (b:bs) = (Nothing, Just b):zipLines ([a]:as) bs
+zipLines (a:as) ([b]:bs) = (Just a, Nothing):zipLines as ([b]:bs)
+
 toGSyn :: Monoid v => Syn v a -> [GSyn]
 toGSyn = go mempty 0 []
   where
@@ -125,13 +144,13 @@ toGSyn = go mempty 0 []
     convert (Syn (Pure _)) = GDone
     convert (Syn (Free Forever)) = GForever
     convert (Syn (Free (MapView _ p _))) = convert p
-    convert (Syn (Free (Await _ _))) = GAwait
-    convert (Syn (Free (Emit _ _))) = GEmit
+    convert (Syn (Free (Await (Event e) _))) = GAwait e
+    convert (Syn (Free (Emit (EventValue (Event e) _) _))) = GEmit e
     convert (Syn (Free (Or p q _))) = GBin GOr (convert p) (convert q)
     convert (Syn (Free (And p q _))) = GBin GAnd (convert p) (convert q)
 
     go m eid gp p = if M.size m' == 0
-      then (convert p':gp)
+      then convert p':gp
       else go m' eid' (convert p':gp) p'
       where
         (eid', p', _, m', ios, u) = Syn.stepOnce' m 0 eid p Syn.E
@@ -146,12 +165,16 @@ zipPadF as bs = zip
   (take (max 0 (length bs - length as)) (repeat Nothing) <> map Just as)
   (take (max 0 (length as - length bs)) (repeat Nothing) <> map Just bs)
 
+pprintProgram p = void $ traverse putStrLn (concat $ fst $ showTSyn (toTSyn  (reverse $ toGSyn p)))
+
+pprintProgram2 p = void $ traverse putStrLn (showProgram' ((reverse $ toGSyn p)))
+
 showTrail :: GSyn -> [String]
 showTrail = fst3 . go
   where
     go :: GSyn -> ([String], Int, Int)
-    go GEmit = (["▲"], 1, 0)
-    go GAwait = (["○"], 1, 0)
+    go (GEmit e) = ([evColor e "▲"], 1, 0)
+    go (GAwait e) = ([evColor e "○"], 1, 0)
     go GDone = (["◆"], 1, 0)
     go GForever = (["∞"], 1, 0)
     go (GBin op p q) =
@@ -214,16 +237,61 @@ showProgram = concat . go []
       | a == b = strip as bs
       | otherwise = (b:bs)
 
+showProgram' :: [GSyn] -> [String]
+showProgram' = concat . intersperse [""] . map showTrail
+
 --------------------------------------------------------------------------------
 
-p4 :: Syn () _
-p4 = Syn.local $ \e -> Syn.local $ \f -> do
-  a@((_, _), _, (_, _)) <- Syn.andd
-         ( Syn.andd (Syn.await e, Syn.emit f "F")
-         , Syn.orr [ Syn.await f >> Syn.orr [ Syn.forever, Syn.await e ], Syn.forever ]
-         , Syn.andd (pure "_" :: Syn () String, Syn.await f >> Syn.emit e "E")
-         )
-  pure a
+-- p4 :: Syn () _
+-- p4 = Syn.local $ \e -> Syn.local $ \f -> do
+--   a@((_, _), _, (_, _)) <- Syn.andd
+--          ( Syn.andd (Syn.await e, Syn.emit f "F")
+--          , Syn.orr [ Syn.await f >> Syn.orr [ Syn.forever, Syn.await e ], Syn.forever ]
+--          , Syn.andd (pure "_" :: Syn () String, Syn.await f >> Syn.emit e "E")
+--          )
+--   pure a
+
+-- void $ traverse putStrLn (concat $ fst $ showTSyn (toTSyn  (reverse $ toGSyn p6)))
+
+-- p6 = Syn.local $ \e -> Syn.local $ \f -> Syn.local $ \g -> do
+--   a@((_, _), (_, _, _), (_, _, _), (_, _)) <- Syn.andd
+--     ( Syn.andd (Syn.await e, Syn.emit f "F" >> (Syn.andd (Syn.await g, Syn.await g) :: Syn () (_, _)) >> Syn.emit e "E")
+--     , Syn.andd (Syn.await f, Syn.await g, Syn.await e)
+--     , Syn.andd (Syn.await e, Syn.await g, Syn.await f)
+--     , Syn.andd (pure "_" :: Syn () String, Syn.await f >> Syn.emit g "G")
+--     )
+--   pure a
+-- 
+-- p6_2 = Syn.local $ \e -> Syn.local $ \f -> Syn.local $ \g -> do
+--   a@((_, _), (_, _, _), (_, _, _), (_, _)) <- Syn.andd
+--     ( Syn.andd (Syn.await e, Syn.emit f "F" >> Syn.await g>> Syn.emit e "E")
+--     , Syn.andd (Syn.await f, Syn.await g, Syn.await e)
+--     , Syn.andd (Syn.await e, Syn.await g, Syn.await f)
+--     , Syn.andd (pure "_" :: Syn () String, Syn.await f >> Syn.emit g "G")
+--     )
+--   pure a
+-- 
+-- p7 :: Syn () _
+-- p7 = Syn.local $ \e -> Syn.local $ \f -> do
+--   (_, _) <- Syn.andd
+--     ( go 0 0 e f
+--     , do
+--         Syn.emit f 1
+--         Syn.emit f 2
+--         Syn.emit f 3
+--         Syn.emit f 6
+--         Syn.emit f 8
+--         Syn.emit e (Right ())
+--     )
+--   pure ()
+--   where
+--     go :: Int -> Int -> Syn.Event Syn.Internal (Either Int ()) -> Syn.Event Syn.Internal Int -> Syn () Int
+--     go x y e f = do
+--       a <- Syn.orr [ Left <$> Syn.await e, Right <$> Syn.await f ]
+--       case a of
+--         Left (Left x') -> go (x + x') y e f
+--         Right y'       -> go x (y + y') e f
+--         _              -> pure (x + y)
 
 svg :: Element
 svg = g_ [] (text_ [] "YO")
@@ -284,7 +352,7 @@ generateSVG style t = mconcat $ intersperse "\n"
   , "</svg>"
   ]
 
-main :: IO ()
-main = do
-  style <- readFile "style.css"
-  writeFile "out.svg" (generateSVG style trails)
+-- main :: IO ()
+-- main = do
+--   style <- readFile "style.css"
+--   writeFile "out.svg" (generateSVG style trails)
