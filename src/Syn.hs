@@ -335,7 +335,7 @@ advance nid eid ios rsp@(Syn (Free (Await _ _))) v
 
 -- view
 advance nid eid ios rsp@(Syn (Free (View v next))) _
-  = advance nid (eid + 1) ios (Syn next) (V v)
+  = advance nid eid ios (Syn next) (V v)
 
 -- mapView
 advance nid eid ios rsp@(Syn (Free (MapView f m next))) v
@@ -344,8 +344,8 @@ advance nid eid ios rsp@(Syn (Free (MapView f m next))) v
       rsp' -> (eid', ios', Syn (Free (MapView f rsp' next)), U f v')
   where
     (eid', ios', rsp', v') = case v of
-      U uf uv -> advance nid (eid + 1) ios m (unsafeCoerce uv)
-      _ -> advance nid (eid + 1) ios m E
+      U uf uv -> advance nid eid ios m (unsafeCoerce uv)
+      _ -> advance nid eid ios m E
 
 -- local
 advance nid eid ios (Syn (Free (Local f next))) v
@@ -357,7 +357,7 @@ advance nid eid ios rsp@(Syn (Free (Emit _ _))) v
 
 -- async
 advance nid eid ios (Syn (Free (Async io next))) v
-  = advance nid (eid + 1) (io:ios) (Syn next) v
+  = advance nid eid (io:ios) (Syn next) v
 
 -- and
 advance nid eid ios rsp@(Syn (Free (And p q next))) v
@@ -374,8 +374,8 @@ advance nid eid ios rsp@(Syn (Free (And p q next))) v
       P pv qv -> (pv, qv)
       _ -> (E, E)
 
-    (eid', ios', p', pv') = advance nid (eid + 1) ios p pv
-    (eid'', ios'', q', qv') = advance nid (eid' + 1) ios' q qv
+    (eid', ios', p', pv') = advance nid eid ios p pv
+    (eid'', ios'', q', qv') = advance nid eid' ios' q qv
 
 advance nid eid ios rsp@(Syn (Free (Or p q next))) v
   = case (p', q') of
@@ -393,8 +393,8 @@ advance nid eid ios rsp@(Syn (Free (Or p q next))) v
       (E, E) -> v
       (_, _) -> P pv' qv'
 
-    (eid', ios', p', pv') = advance nid (eid + 1) ios p pv
-    (eid'', ios'', q', qv') = advance nid (eid' + 1) ios' q qv
+    (eid', ios', p', pv') = advance nid eid ios p pv
+    (eid'', ios'', q', qv') = advance nid eid' ios' q qv
 
 -- advanceDbg . advanceDbg == advanceDbg
 advanceDbg
@@ -424,7 +424,7 @@ advanceDbg nid eid ios (m:ms) rsp@(Syn (Free (Await (Event e) next))) v
 
 -- -- view
 -- advanceDbg nid eid ios rsp@(Syn (Free (View v next))) _
---   = advanceDbg nid (eid + 1) ios (Syn next) (V v)
+--   = advanceDbg nid eid ios (Syn next) (V v)
 -- 
 -- -- mapView
 -- advanceDbg nid eid ios rsp@(Syn (Free (MapView f m next))) v
@@ -433,12 +433,12 @@ advanceDbg nid eid ios (m:ms) rsp@(Syn (Free (Await (Event e) next))) v
 --       rsp' -> (eid', ios', Syn (Free (MapView f rsp' next)), U f v')
 --   where
 --     (eid', ios', rsp', v') = case v of
---       U uf uv -> advanceDbg nid (eid + 1) ios m (unsafeCoerce uv)
---       _ -> advanceDbg nid (eid + 1) ios m E
+--       U uf uv -> advanceDbg nid eid ios m (unsafeCoerce uv)
+--       _ -> advanceDbg nid eid ios m E
 -- 
 -- -- local
 -- advanceDbg nid eid ios (Syn (Free (Local f next))) v
---   = advanceDbg nid (eid + 1) ios (f (Event (Internal (nid, eid))) >>= Syn . next) v
+--   = advanceDbg nid eid ios (f (Event (Internal (nid, eid))) >>= Syn . next) v
 -- 
 -- -- emit
 -- advanceDbg nid eid ios rsp@(Syn (Free (Emit _ _))) v
@@ -446,7 +446,7 @@ advanceDbg nid eid ios (m:ms) rsp@(Syn (Free (Await (Event e) next))) v
 -- 
 -- -- async
 -- advanceDbg nid eid ios (Syn (Free (Async io next))) v
---   = advanceDbg nid (eid + 1) (io:ios) (Syn next) v
+--   = advanceDbg nid eid (io:ios) (Syn next) v
 -- 
 -- -- and
 -- advanceDbg nid eid ios rsp@(Syn (Free (And p q next))) v
@@ -463,8 +463,8 @@ advanceDbg nid eid ios (m:ms) rsp@(Syn (Free (Await (Event e) next))) v
 --       P pv qv -> (pv, qv)
 --       _ -> (E, E)
 -- 
---     (eid', ios', p', pv') = advanceDbg nid (eid + 1) ios p pv
---     (eid'', ios'', q', qv') = advanceDbg nid (eid' + 1) ios' q qv
+--     (eid', ios', p', pv') = advanceDbg nid eid ios p pv
+--     (eid'', ios'', q', qv') = advanceDbg nid eid' ios' q qv
 -- 
 -- advanceDbg nid eid ios rsp@(Syn (Free (Or p q next))) v
 --   = case (p', q') of
@@ -482,8 +482,8 @@ advanceDbg nid eid ios (m:ms) rsp@(Syn (Free (Await (Event e) next))) v
 --       (E, E) -> v
 --       (_, _) -> P pv' qv'
 -- 
---     (eid', ios', p', pv') = advanceDbg nid (eid + 1) ios p pv
---     (eid'', ios'', q', qv') = advanceDbg nid (eid' + 1) ios' q qv
+--     (eid', ios', p', pv') = advanceDbg nid eid ios p pv
+--     (eid'', ios'', q', qv') = advanceDbg nid eid' ios' q qv
 
 advanceIO
   :: Monoid v
@@ -508,13 +508,13 @@ advanceIO nid eid ios rsp@(Syn (Free (Await _ _))) v
 
 -- view
 advanceIO nid eid ios rsp@(Syn (Free (View v next))) _
-  = advanceIO nid (eid + 1) ios (Syn next) (V v)
+  = advanceIO nid eid ios (Syn next) (V v)
 
 -- mapView
 advanceIO nid eid ios rsp@(Syn (Free (MapView f m next))) v = do
   (eid', ios', rsp', v') <- case v of
-    U uf uv -> advanceIO nid (eid + 1) ios m (unsafeCoerce uv)
-    _ -> advanceIO nid (eid + 1) ios m E
+    U uf uv -> advanceIO nid eid ios m (unsafeCoerce uv)
+    _ -> advanceIO nid eid ios m E
 
   case rsp' of
     Syn (Pure a) -> advanceIO nid eid' ios' (Syn $ next a) (V $ f (foldV v'))
@@ -530,12 +530,12 @@ advanceIO nid eid ios rsp@(Syn (Free (Emit _ _))) v
 
 -- async
 advanceIO nid eid ios (Syn (Free (Async io next))) v
-  = advanceIO nid (eid + 1) (io:ios) (Syn next) v
+  = advanceIO nid eid (io:ios) (Syn next) v
 
 -- remote
 advanceIO nid eid ios (Syn (Free (Remote make next))) v = do
   trail <- make
-  advanceIO nid (eid + 1) ios (Syn (Free (RemoteU trail next))) v
+  advanceIO nid eid ios (Syn (Free (RemoteU trail next))) v
 
 -- remoteU
 advanceIO nid eid ios rsp@(Syn (Free (RemoteU trail next))) v = do
@@ -546,8 +546,8 @@ advanceIO nid eid ios rsp@(Syn (Free (RemoteU trail next))) v = do
 
 -- and
 advanceIO nid eid ios rsp@(Syn (Free (And p q next))) v = do
-  (eid', ios', p', pv') <- advanceIO nid (eid + 1) ios p pv
-  (eid'', ios'', q', qv') <- advanceIO nid (eid' + 1) ios' q qv
+  (eid', ios', p', pv') <- advanceIO nid eid ios p pv
+  (eid'', ios'', q', qv') <- advanceIO nid eid' ios' q qv
 
   -- TODO: fromEmptyView, isE
   let v' = case (pv', qv') of
@@ -565,8 +565,8 @@ advanceIO nid eid ios rsp@(Syn (Free (And p q next))) v = do
       _ -> (E, E)
 
 advanceIO nid eid ios rsp@(Syn (Free (Or p q next))) v = do
-  (eid', ios', p', pv') <- advanceIO nid (eid + 1) ios p pv
-  (eid'', ios'', q', qv') <- advanceIO nid (eid' + 1) ios' q qv
+  (eid', ios', p', pv') <- advanceIO nid eid ios p pv
+  (eid'', ios'', q', qv') <- advanceIO nid eid' ios' q qv
 
   -- TODO: fromEmptyView, isE
   let v' = case (pv', qv') of
