@@ -32,9 +32,11 @@ data GSyn
 
 data TSyn
   = TDone
+  | TBlocked
   | TAwait Syn.EventId TSyn
   | TEmit Syn.EventId TSyn
   | TForever
+  | TJoin TSyn
   | TBin BinOp TSyn TSyn TSyn
   deriving (Eq, Show)
 
@@ -58,10 +60,12 @@ match (GBin op p q) u = TBin op (match p u) (wrapG q) u
 
 toTSyn' :: DbgSyn -> TSyn
 toTSyn' DbgDone = TDone
+toTSyn' DbgBlocked = TBlocked
 toTSyn' (DbgAwait e next) = TAwait e (toTSyn' next)
 toTSyn' (DbgEmit e next) = TEmit e (toTSyn' next)
+toTSyn' (DbgJoin next) = toTSyn' next
 toTSyn' DbgForever = TForever
-toTSyn' (DbgBin op p q next) = TBin (toTOp op) (toTSyn' (p DbgDone)) (toTSyn' (q DbgDone)) (toTSyn' next)
+toTSyn' (DbgBin op p q next) = TBin (toTOp op) (toTSyn' (p DbgBlocked)) (toTSyn' (q DbgBlocked)) (toTSyn' next)
   where
     toTOp DbgAnd = GAnd
     toTOp DbgOr = GOr
@@ -85,8 +89,9 @@ evColor (External (_, c)) = color c
 
 showTSyn :: TSyn -> ([[String]], Int)
 -- showTSyn TDone = ([["\ESC[34m◆\ESC[m"]], 1)
--- showTSyn TDone = ([["◆"]], 1)
-showTSyn TDone = ([[]], 1)
+showTSyn TDone = ([["◆"]], 1)
+showTSyn TBlocked = ([], 1)
+-- showTSyn TDone = ([[]], 1)
 showTSyn TForever = ([["∞"]], 1)
 showTSyn (TAwait e next) = ([[evColor e "○" <> ss (w - 1)]] <> t, w)
   where
@@ -95,7 +100,7 @@ showTSyn (TEmit e next) = ([[evColor e "▲" <> ss (w - 1)]] <> t, w)
   where
     (t, w) = showTSyn next
 showTSyn (TBin op p q d) =
-  ( header <> go (fmap (fmap (fmap (padto pw ' '))) pg) qg <> if d == TDone then [] else dt
+  ( header <> go (fmap (fmap (fmap (padto pw ' '))) pg) qg <> dt
   , pw + qw + 1
   )
   where

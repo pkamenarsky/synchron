@@ -109,9 +109,9 @@ data DbgBinOp = DbgAnd | DbgOr deriving (Eq, Show)
 data DbgSyn
   = DbgDone
   | DbgBlocked
+  | DbgForever
   | DbgAwait EventId DbgSyn
   | DbgEmit EventId DbgSyn
-  | DbgForever
   | DbgJoin DbgSyn
   | DbgBin DbgBinOp (DbgSyn -> DbgSyn) (DbgSyn -> DbgSyn) DbgSyn
 
@@ -364,7 +364,7 @@ advance nid eid ios rsp@(Syn (Free (And p q next))) v
   = case (p', q') of
       (Syn (Pure a), Syn (Pure b))
         -> let (eid''', ios''', p''', fd''', v''') = advance nid eid'' ios'' (Syn (next (a, b))) (V (foldV pv' <> foldV qv'))
-           in (eid''', ios''', p''', \dbg -> DbgBin DbgAnd pdbg' qdbg' (fd''' dbg), v''')
+           in (eid''', ios''', p''', \dbg -> DbgJoin (fd''' dbg), v''')
       _ -> (eid'', ios'', Syn (Free (And p' q' next)), dbgcomp, v')
   where
     dbgcomp (DbgBin op pd qd nd) = DbgBin op (pdbg' . pd) (qdbg' . qd) nd
@@ -385,10 +385,10 @@ advance nid eid ios rsp@(Syn (Free (Or p q next))) v
   = case (p', q') of
       (Syn (Pure a), _)
         -> let (eid''', ios''', p''', fd''', v''') = advance nid eid'' ios'' (Syn (next (a, (q', qv')))) (V (foldV pv'))
-           in (eid''', ios''', p''', \dbg -> DbgBin DbgOr pdbg' qdbg' (fd''' dbg), v''')
+           in (eid''', ios''', p''', \dbg -> DbgJoin (fd''' dbg), v''')
       (_, Syn (Pure b))
         -> let (eid''', ios''', p''', fd''', v''') = advance nid eid'' ios'' (Syn (next (b, (p', pv')))) (V (foldV qv'))
-           in (eid''', ios''', p''', \dbg -> DbgBin DbgOr pdbg' qdbg' (fd''' dbg), v''')
+           in (eid''', ios''', p''', \dbg -> DbgJoin (fd''' dbg), v''')
       _ -> (eid'', ios'', Syn (Free (Or p' q' next)), dbgcomp, v')
   where
     dbgcomp (DbgBin op pd qd nd) = DbgBin op (pdbg' . pd) (qdbg' . qd) nd
