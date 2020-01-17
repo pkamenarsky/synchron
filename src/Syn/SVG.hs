@@ -30,50 +30,55 @@ data GSyn
   | GBin BinOp GSyn GSyn
   deriving (Eq, Show)
 
-data TSyn
+data TSyn w
   = TDone
   | TBlocked
-  | TAwait Syn.EventId TSyn
-  | TEmit Syn.EventId TSyn
+  | TAwait w Syn.EventId (TSyn w)
+  | TEmit w Syn.EventId (TSyn w)
   | TForever
-  | TJoin TSyn
-  | TBin BinOp TSyn TSyn TSyn
+  | TJoin (TSyn w)
+  | TBin w BinOp (TSyn w) (TSyn w) (TSyn w)
   deriving (Eq, Show)
 
-wrapG :: GSyn -> TSyn
+wrapG :: GSyn -> TSyn ()
 wrapG GDone = TDone
-wrapG (GAwait e) = TAwait e TDone
-wrapG (GEmit e) = TEmit e TDone
+wrapG (GAwait e) = TAwait () e TDone
+wrapG (GEmit e) = TEmit () e TDone
 wrapG GForever = TForever
-wrapG (GBin op p q) = TBin op (wrapG p) (wrapG q) TDone
+wrapG (GBin op p q) = TBin () op (wrapG p) (wrapG q) TDone
 
--- | Must be right folded
-match :: GSyn -> TSyn -> TSyn
-match GDone u = u
-match (GAwait e) u = TAwait e u
-match (GEmit e) u = TEmit e u
-match GForever _ = TForever
-match (GBin op p q) x@(TBin op' p' q' d')
-  | op == op' = TBin op (match p p') (match q q') d'
-match (GBin op p q) u = TBin op (match p u) (wrapG q) u
--- match (GBin op p q) u = TBin op (wrapG p) (wrapG q) u
+type Width = Int
 
-toTSyn' :: DbgSyn -> TSyn
+labelWidth :: TSyn () -> (TSyn Width, Width)
+labelWidth TDone = (TDone, 1)
+labelWidth TBlocked = (TBlocked, 1)
+labelWidth TForever = (TForever, 1)
+labelWidth (TAwait _ e next) = (TAwait w e p, w)
+  where
+    (p, w) = labelWidth next
+labelWidth (TEmit _ e next) = (TEmit w e p, w)
+  where
+    (p, w) = labelWidth next
+labelWidth (TBin _ op p q d) = (TBin (max (pw + qw) dw) op p' q' d', max (pw + qw) dw)
+  where
+    (p', pw) = labelWidth p
+    (q', qw) = labelWidth q
+    (d', dw) = labelWidth d
+labelWidth (TJoin p) = (TJoin p', w)
+  where
+    (p', w) = labelWidth p
+
+toTSyn' :: DbgSyn -> TSyn ()
 toTSyn' DbgDone = TDone
 toTSyn' DbgBlocked = TBlocked
-toTSyn' (DbgAwait e next) = TAwait e (toTSyn' next)
-toTSyn' (DbgEmit e next) = TEmit e (toTSyn' next)
-toTSyn' (DbgJoin next) = toTSyn' next
+toTSyn' (DbgAwait e next) = TAwait () e (toTSyn' next)
+toTSyn' (DbgEmit e next) = TEmit () e (toTSyn' next)
+toTSyn' (DbgJoin next) = TJoin (toTSyn' next)
 toTSyn' DbgForever = TForever
-toTSyn' (DbgBin op p q next) = TBin (toTOp op) (toTSyn' (p DbgBlocked)) (toTSyn' (q DbgBlocked)) (toTSyn' next)
+toTSyn' (DbgBin op p q next) = TBin () (toTOp op) (toTSyn' (p DbgBlocked)) (toTSyn' (q DbgBlocked)) (toTSyn' next)
   where
     toTOp DbgAnd = GAnd
     toTOp DbgOr = GOr
-
-toTSyn :: [GSyn] -> TSyn
-toTSyn [] = error ""
-toTSyn [g] = wrapG g
-toTSyn (g:gs) = match g (toTSyn gs)
 
 r c x = take x (repeat c)
 ss = r ' '
@@ -87,30 +92,43 @@ evColor :: EventId -> String -> String
 evColor (Internal (_, c)) = color c
 evColor (External (_, c)) = color c
 
-showTSyn :: TSyn -> ([[String]], Int)
--- showTSyn TDone = ([["\ESC[34m◆\ESC[m"]], 1)
+data Block = Unary String | Binary Int BinOp [Block] [Block]
+
+comb :: [Block] -> [Block] -> [Block]
+comb (Unary s:as) (Unary t:bs) = Unary (s <> " " <> t):comb as bs
+
+printLine1 :: TSyn () -> ([Block], Int)
+printLine1 TDone = ([Unary "◆"], 1)
+printLine1 TBlocked = ([], 1)
+printLine1 (TAwait _ e next) = ([Unary (evColor e "○")] <> t, w)
+  where
+    (t, w) = printLine1 next
+
+showTSyn :: TSyn () -> ([[String]], Int)
 showTSyn TDone = ([["◆"]], 1)
 showTSyn TBlocked = ([], 1)
--- showTSyn TDone = ([[]], 1)
 showTSyn TForever = ([["∞"]], 1)
-showTSyn (TAwait e next) = ([[evColor e "○" <> ss (w - 1)]] <> t, w)
+showTSyn (TJoin next) = (t, w) -- ([["v" <> ss (w - 1)]] <> t, w)
   where
     (t, w) = showTSyn next
-showTSyn (TEmit e next) = ([[evColor e "▲" <> ss (w - 1)]] <> t, w)
+showTSyn (TAwait _ e next) = ([[evColor e "○" <> ss (w - 1)]] <> t, w)
   where
     (t, w) = showTSyn next
-showTSyn (TBin op p q d) =
-  ( header <> go (fmap (fmap (fmap (padto pw ' '))) pg) qg <> dt
+showTSyn (TEmit _ e next) = ([[evColor e "▲" <> ss (w - 1)]] <> t, w)
+  where
+    (t, w) = showTSyn next
+showTSyn (TBin _ op p q d) =
+  ( header <> go pg (fmap (fmap (fmap (padto qw ' '))) qg) <> dt
   , pw + qw + 1
   )
   where
     (pt, pw) = showTSyn p
-    (qt, qw) = showTSyn q
+    (qt, qw') = showTSyn q
     (dt, dw) = showTSyn d
 
-    -- pw = max pw' dw
+    qw = max qw' dw
 
-    padto x r s = s <> take (x - length s) (repeat r)
+    padto x r s = take (x - length s) (repeat r) <> s
 
     (pg, qg) = unzip (zipPadB pt qt)
 
@@ -192,11 +210,9 @@ zipPadF as bs = zip
   (take (max 0 (length bs - length as)) (repeat Nothing) <> map Just as)
   (take (max 0 (length as - length bs)) (repeat Nothing) <> map Just bs)
 
-pprintProgram p = void $ traverse putStrLn (concat $ fst $ showTSyn (toTSyn  (reverse $ toGSyn p)))
+pprintProgram p = void $ traverse putStrLn (showProgram' ((reverse $ toGSyn p)))
 
-pprintProgram2 p = void $ traverse putStrLn (showProgram' ((reverse $ toGSyn p)))
-
-pprintProgram3 p = void $ traverse putStrLn (concat $ fst $ showTSyn (toTSyn' (toDbgSyn p DbgDone)))
+pprintProgram2 p = void $ traverse putStrLn (concat $ fst $ showTSyn (toTSyn' (toDbgSyn p DbgDone)))
 
 showTrail :: GSyn -> [String]
 showTrail = fst3 . go
