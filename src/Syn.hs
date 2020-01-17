@@ -66,6 +66,8 @@ data SynF v next
 
   | View v next
 
+  | forall a. Checkpoint NodeId Int (Syn v a) (a -> next)
+
   | forall u a. Monoid u => MapView (u -> v) (Syn u a) (a -> next)
 
   | forall a. Remote (IO (Trail v a)) (a -> next)
@@ -220,6 +222,11 @@ unblock _ rsp@(Syn (Pure a)) = (rsp, False)
 -- local
 unblock _ rsp@(Syn (Free (Local _ _))) = (rsp, False)
 
+-- checkpoint
+unblock m rsp@(Syn (Free (Checkpoint nid eid p next))) = (Syn (Free (Checkpoint nid eid p' next)), b)
+  where
+    (p', b) = unblock m p
+
 -- mapView
 unblock m rsp@(Syn (Free (MapView f v next))) = (Syn (Free (MapView f v' next)), b)
   where
@@ -337,6 +344,14 @@ advance nid eid ios rsp@(Syn (Free (Await _ _))) v
 advance nid eid ios rsp@(Syn (Free (View v next))) _
   = advance nid eid ios (Syn next) (V v)
 
+-- checkpoint
+advance nid eid ios rsp@(Syn (Free (Checkpoint cnid ceid m next))) v
+  = case rsp' of
+      Syn (Pure a) -> advance nid eid' ios' (Syn $ next a) v'
+      rsp' -> (eid', ios', Syn (Free (Checkpoint cnid ceid rsp' next)), v')
+  where
+    (eid', ios', rsp', v') = advance nid eid ios m v
+
 -- mapView
 advance nid eid ios rsp@(Syn (Free (MapView f m next))) v
   = case rsp' of
@@ -349,7 +364,7 @@ advance nid eid ios rsp@(Syn (Free (MapView f m next))) v
 
 -- local
 advance nid eid ios (Syn (Free (Local f next))) v
-  = advance nid (eid + 1) ios (f (Event (Internal (nid, eid))) >>= Syn . next) v
+  = advance nid (eid + 1) ios (Syn $ liftF $ Checkpoint nid eid (f (Event (Internal (nid, eid))) >>= Syn . next) id) v
 
 -- emit
 advance nid eid ios rsp@(Syn (Free (Emit _ _))) v
@@ -418,54 +433,58 @@ advanceDbg nid eid ios _ rsp@(Syn (Free Forever)) v
 -- await
 advanceDbg nid eid ios (m:ms) rsp@(Syn (Free (Await (Event e) next))) v
   = case M.lookup e m of
-      Just (EventValue _ a) -> undefined
+      Just (EventValue _ a) -> let
+        (eid', ios', rsp', d', v') = advanceDbg nid eid ios ms (Syn (next $ unsafeCoerce a)) v
+        in (eid', ios', rsp', DbgAwait e d', v')
       Nothing -> (eid, ios, rsp, DbgAwait e DbgBlocked, v)
   -- = (eid, ios, rsp, DbgAwait e DbgDone, v)
 
--- -- view
--- advanceDbg nid eid ios rsp@(Syn (Free (View v next))) _
---   = advanceDbg nid eid ios (Syn next) (V v)
--- 
--- -- mapView
--- advanceDbg nid eid ios rsp@(Syn (Free (MapView f m next))) v
---   = case rsp' of
---       Syn (Pure a) -> advanceDbg nid eid' ios' (Syn $ next a) (V $ f (foldV v'))
---       rsp' -> (eid', ios', Syn (Free (MapView f rsp' next)), U f v')
---   where
---     (eid', ios', rsp', v') = case v of
---       U uf uv -> advanceDbg nid eid ios m (unsafeCoerce uv)
---       _ -> advanceDbg nid eid ios m E
--- 
--- -- local
--- advanceDbg nid eid ios (Syn (Free (Local f next))) v
---   = advanceDbg nid eid ios (f (Event (Internal (nid, eid))) >>= Syn . next) v
--- 
--- -- emit
--- advanceDbg nid eid ios rsp@(Syn (Free (Emit _ _))) v
---   = (eid, ios, rsp, v)
--- 
--- -- async
--- advanceDbg nid eid ios (Syn (Free (Async io next))) v
---   = advanceDbg nid eid (io:ios) (Syn next) v
--- 
--- -- and
--- advanceDbg nid eid ios rsp@(Syn (Free (And p q next))) v
---   = case (p', q') of
---       (Syn (Pure a), Syn (Pure b))
---         -> advanceDbg nid eid'' ios'' (Syn (next (a, b))) (V (foldV pv' <> foldV qv'))
---       _ -> (eid'', ios'', Syn (Free (And p' q' next)), v')
---   where
---     v' = case (pv', qv') of
---       (E, E) -> v
---       _ -> P pv' qv'
--- 
---     (pv, qv) = case v of
---       P pv qv -> (pv, qv)
---       _ -> (E, E)
--- 
---     (eid', ios', p', pv') = advanceDbg nid eid ios p pv
---     (eid'', ios'', q', qv') = advanceDbg nid eid' ios' q qv
--- 
+-- view
+advanceDbg nid eid ios m rsp@(Syn (Free (View v next))) _
+  = advanceDbg nid eid ios m (Syn next) (V v)
+
+-- mapView
+advanceDbg nid eid ios m rsp@(Syn (Free (MapView f p next))) v
+  = case rsp' of
+      Syn (Pure a) -> advanceDbg nid eid' ios' m (Syn $ next a) (V $ f (foldV v'))
+      rsp' -> undefined -- (eid', ios', Syn (Free (MapView f rsp' next)), U f v')
+  where
+    (eid', ios', rsp', _, v') = case v of
+      U uf uv -> advanceDbg nid eid ios m p (unsafeCoerce uv)
+      _ -> advanceDbg nid eid ios m p E
+
+-- local
+advanceDbg nid eid ios m (Syn (Free (Local f next))) v
+  = advanceDbg nid eid ios m (f (Event (Internal (nid, eid))) >>= Syn . next) v
+
+-- emit
+advanceDbg nid eid ios (m:ms) rsp@(Syn (Free (Emit (EventValue (Event e) _) next))) v
+  = (eid', ios', rsp', DbgEmit e d',  v')
+  where
+    (eid', ios', rsp', d', v') = advanceDbg nid eid ios ms (Syn next) v
+
+-- async
+advanceDbg nid eid ios m (Syn (Free (Async io next))) v
+  = advanceDbg nid eid (io:ios) m (Syn next) v
+
+-- and
+advanceDbg nid eid ios m rsp@(Syn (Free (And p q next))) v
+  = case (p', q') of
+      (Syn (Pure a), Syn (Pure b))
+        -> advanceDbg nid eid'' ios'' m (Syn (next (a, b))) (V (foldV pv' <> foldV qv'))
+      _ -> (eid'', ios'', Syn (Free (And p' q' next)), v')
+  where
+    v' = case (pv', qv') of
+      (E, E) -> v
+      _ -> P pv' qv'
+
+    (pv, qv) = case v of
+      P pv qv -> (pv, qv)
+      _ -> (E, E)
+
+    (eid', ios', p', pd', pv') = advanceDbg nid eid ios p m pv
+    (eid'', ios'', q', qd', qv') = advanceDbg nid eid' ios' q m qv
+
 -- advanceDbg nid eid ios rsp@(Syn (Free (Or p q next))) v
 --   = case (p', q') of
 --       (Syn (Pure a), _)
@@ -596,6 +615,9 @@ gather (Syn (Pure _)) = M.empty
 
 -- local
 gather (Syn (Free (Local _ _))) = M.empty
+
+-- checkpoint
+gather (Syn (Free (Checkpoint _ _ m next))) = gather m
 
 -- mapview
 gather (Syn (Free (MapView _ m next))) = gather m
