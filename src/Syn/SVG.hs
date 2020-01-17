@@ -15,7 +15,7 @@ import qualified Data.Text as T
 
 import Graphics.Svg hiding (aR)
 
-import Syn (Syn (..), SynF (..), Event (..), EventId (..), EventValue (..))
+import Syn (DbgSyn (..), DbgBinOp (..), Syn (..), SynF (..), Event (..), EventId (..), EventValue (..))
 import qualified Syn
 
 import Debug.Trace
@@ -56,6 +56,16 @@ match (GBin op p q) x@(TBin op' p' q' d')
 match (GBin op p q) u = TBin op (match p u) (wrapG q) u
 -- match (GBin op p q) u = TBin op (wrapG p) (wrapG q) u
 
+toTSyn' :: DbgSyn -> TSyn
+toTSyn' DbgDone = TDone
+toTSyn' (DbgAwait e next) = TAwait e (toTSyn' next)
+toTSyn' (DbgEmit e next) = TEmit e (toTSyn' next)
+toTSyn' DbgForever = TForever
+toTSyn' (DbgBin op p q next) = TBin (toTOp op) (toTSyn' (p DbgDone)) (toTSyn' (q DbgDone)) (toTSyn' next)
+  where
+    toTOp DbgAnd = GAnd
+    toTOp DbgOr = GOr
+
 toTSyn :: [GSyn] -> TSyn
 toTSyn [] = error ""
 toTSyn [g] = wrapG g
@@ -75,7 +85,8 @@ evColor (External (_, c)) = color c
 
 showTSyn :: TSyn -> ([[String]], Int)
 -- showTSyn TDone = ([["\ESC[34m◆\ESC[m"]], 1)
-showTSyn TDone = ([["◆"]], 1)
+-- showTSyn TDone = ([["◆"]], 1)
+showTSyn TDone = ([[]], 1)
 showTSyn TForever = ([["∞"]], 1)
 showTSyn (TAwait e next) = ([[evColor e "○" <> ss (w - 1)]] <> t, w)
   where
@@ -84,15 +95,17 @@ showTSyn (TEmit e next) = ([[evColor e "▲" <> ss (w - 1)]] <> t, w)
   where
     (t, w) = showTSyn next
 showTSyn (TBin op p q d) =
-  ( header <> go pg qg -- <> if d == TDone then [] else dt
+  ( header <> go (fmap (fmap (fmap (padto pw ' '))) pg) qg <> if d == TDone then [] else dt
   , pw + qw + 1
   )
   where
     (pt, pw) = showTSyn p
-    (qt, qw') = showTSyn q
+    (qt, qw) = showTSyn q
     (dt, dw) = showTSyn d
 
-    qw = (max (pw + 1 + qw') dw) - pw - 1
+    -- pw = max pw' dw
+
+    padto x r s = s <> take (x - length s) (repeat r)
 
     (pg, qg) = unzip (zipPadB pt qt)
 
@@ -137,6 +150,15 @@ zipLines ([a]:as) ([b]:bs) = (Just [a], Just [b]):zipLines as bs
 zipLines ([a]:as) (b:bs) = (Nothing, Just b):zipLines ([a]:as) bs
 zipLines (a:as) ([b]:bs) = (Just a, Nothing):zipLines as ([b]:bs)
 
+toDbgSyn :: Monoid v => Syn v a -> (DbgSyn -> DbgSyn)
+toDbgSyn = go mempty 0 id
+  where
+    go m eid dbg p = if M.size m' == 0
+      then dbg . dbg'
+      else go m' eid' (dbg . dbg') p'
+      where
+        (eid', p', dbg', _, m', ios, u) = Syn.stepOnce' m 0 eid p Syn.E
+
 toGSyn :: Monoid v => Syn v a -> [GSyn]
 toGSyn = go mempty 0 []
   where
@@ -153,7 +175,7 @@ toGSyn = go mempty 0 []
       then convert p':gp
       else go m' eid' (convert p':gp) p'
       where
-        (eid', p', _, m', ios, u) = Syn.stepOnce' m 0 eid p Syn.E
+        (eid', p', _, _, m', ios, u) = Syn.stepOnce' m 0 eid p Syn.E
 
 zipPadB :: [a] -> [b] -> [(Maybe a, Maybe b)]
 zipPadB as bs = zip
@@ -168,6 +190,8 @@ zipPadF as bs = zip
 pprintProgram p = void $ traverse putStrLn (concat $ fst $ showTSyn (toTSyn  (reverse $ toGSyn p)))
 
 pprintProgram2 p = void $ traverse putStrLn (showProgram' ((reverse $ toGSyn p)))
+
+pprintProgram3 p = void $ traverse putStrLn (concat $ fst $ showTSyn (toTSyn' (toDbgSyn p DbgDone)))
 
 showTrail :: GSyn -> [String]
 showTrail = fst3 . go

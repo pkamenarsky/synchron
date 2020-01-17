@@ -104,7 +104,7 @@ instance Show (Syn v a) where
   show (Syn (Free (Or a b _))) = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
   show (Syn (Free (And a b _))) = "And [" <> show a <> ", " <> show b <> "]"
 
-data DbgBinOp = GAnd | GOr deriving (Eq, Show)
+data DbgBinOp = DbgAnd | DbgOr deriving (Eq, Show)
 
 data DbgSyn
   = DbgDone
@@ -112,8 +112,8 @@ data DbgSyn
   | DbgAwait EventId DbgSyn
   | DbgEmit EventId DbgSyn
   | DbgForever
-  | DbgBin DbgBinOp DbgSyn DbgSyn DbgSyn 
-  deriving (Eq, Show)
+  | DbgJoin DbgSyn
+  | DbgBin DbgBinOp (DbgSyn -> DbgSyn) (DbgSyn -> DbgSyn) DbgSyn
 
 mapView :: Monoid u => (u -> v) -> Syn u a -> Syn v a
 mapView f m = Syn $ liftF (MapView f m id)
@@ -199,7 +199,7 @@ instance (Typeable v, Monoid v) => Semigroup (Orr v a) where
   p <> D = p
   Orr p <> Orr q = Orr $ do
     ((a, v, m), (n, v')) <- Syn (liftF (Or p q id))
-    pure (a, V (foldV v), (m <> Orr n))
+    pure (a, V (foldV v <> foldV v'), (m <> Orr n))
 
 instance (Typeable v, Monoid v) => Monoid (Orr v a) where
   mempty = D
@@ -319,19 +319,19 @@ advance
   -> [IO ()]
   -> Syn v a
   -> V v
-  -> (Int, [IO ()], Syn v a, V v)
+  -> (Int, [IO ()], Syn v a, DbgSyn -> DbgSyn, V v)
 
 -- pure
 advance nid eid ios rsp@(Syn (Pure a)) v
-  = (eid, ios, rsp, v)
+  = (eid, ios, rsp, \_ -> DbgDone, v)
 
 -- forever
 advance nid eid ios rsp@(Syn (Free Forever)) v
-  = (eid, ios, rsp, v)
+  = (eid, ios, rsp, \_ -> DbgForever, v)
 
 -- await
-advance nid eid ios rsp@(Syn (Free (Await _ _))) v
-  = (eid, ios, rsp, v)
+advance nid eid ios rsp@(Syn (Free (Await (Event e) _))) v
+  = (eid, ios, rsp, \dnext -> DbgAwait e dnext, v)
 
 -- view
 advance nid eid ios rsp@(Syn (Free (View v next))) _
@@ -341,9 +341,9 @@ advance nid eid ios rsp@(Syn (Free (View v next))) _
 advance nid eid ios rsp@(Syn (Free (MapView f m next))) v
   = case rsp' of
       Syn (Pure a) -> advance nid eid' ios' (Syn $ next a) (V $ f (foldV v'))
-      rsp' -> (eid', ios', Syn (Free (MapView f rsp' next)), U f v')
+      rsp' -> (eid', ios', Syn (Free (MapView f rsp' next)), dbg', U f v')
   where
-    (eid', ios', rsp', v') = case v of
+    (eid', ios', rsp', dbg', v') = case v of
       U uf uv -> advance nid eid ios m (unsafeCoerce uv)
       _ -> advance nid eid ios m E
 
@@ -352,8 +352,8 @@ advance nid eid ios (Syn (Free (Local f next))) v
   = advance nid (eid + 1) ios (f (Event (Internal (nid, eid))) >>= Syn . next) v
 
 -- emit
-advance nid eid ios rsp@(Syn (Free (Emit _ _))) v
-  = (eid, ios, rsp, v)
+advance nid eid ios rsp@(Syn (Free (Emit (EventValue (Event e) _) _))) v
+  = (eid, ios, rsp, \dbg -> DbgEmit e dbg, v)
 
 -- async
 advance nid eid ios (Syn (Free (Async io next))) v
@@ -363,9 +363,13 @@ advance nid eid ios (Syn (Free (Async io next))) v
 advance nid eid ios rsp@(Syn (Free (And p q next))) v
   = case (p', q') of
       (Syn (Pure a), Syn (Pure b))
-        -> advance nid eid'' ios'' (Syn (next (a, b))) (V (foldV pv' <> foldV qv'))
-      _ -> (eid'', ios'', Syn (Free (And p' q' next)), v')
+        -> let (eid''', ios''', p''', fd''', v''') = advance nid eid'' ios'' (Syn (next (a, b))) (V (foldV pv' <> foldV qv'))
+           in (eid''', ios''', p''', \dbg -> DbgBin DbgAnd pdbg' qdbg' (fd''' dbg), v''')
+      _ -> (eid'', ios'', Syn (Free (And p' q' next)), dbgcomp, v')
   where
+    dbgcomp (DbgBin op pd qd nd) = DbgBin op (pdbg' . pd) (qdbg' . qd) nd
+    dbgcomp p = DbgBin DbgAnd pdbg' qdbg' p
+
     v' = case (pv', qv') of
       (E, E) -> v
       _ -> P pv' qv'
@@ -374,17 +378,22 @@ advance nid eid ios rsp@(Syn (Free (And p q next))) v
       P pv qv -> (pv, qv)
       _ -> (E, E)
 
-    (eid', ios', p', pv') = advance nid eid ios p pv
-    (eid'', ios'', q', qv') = advance nid eid' ios' q qv
+    (eid', ios', p', pdbg', pv') = advance nid eid ios p pv
+    (eid'', ios'', q', qdbg', qv') = advance nid eid' ios' q qv
 
 advance nid eid ios rsp@(Syn (Free (Or p q next))) v
   = case (p', q') of
       (Syn (Pure a), _)
-        -> advance nid eid'' ios'' (Syn (next (a, (q', qv')))) (V (foldV pv'))
+        -> let (eid''', ios''', p''', fd''', v''') = advance nid eid'' ios'' (Syn (next (a, (q', qv')))) (V (foldV pv'))
+           in (eid''', ios''', p''', \dbg -> DbgBin DbgOr pdbg' qdbg' (fd''' dbg), v''')
       (_, Syn (Pure b))
-        -> advance nid eid'' ios'' (Syn (next (b, (p', pv')))) (V (foldV qv'))
-      _ -> (eid'', ios'', Syn (Free (Or p' q' next)), v')
+        -> let (eid''', ios''', p''', fd''', v''') = advance nid eid'' ios'' (Syn (next (b, (p', pv')))) (V (foldV qv'))
+           in (eid''', ios''', p''', \dbg -> DbgBin DbgOr pdbg' qdbg' (fd''' dbg), v''')
+      _ -> (eid'', ios'', Syn (Free (Or p' q' next)), dbgcomp, v')
   where
+    dbgcomp (DbgBin op pd qd nd) = DbgBin op (pdbg' . pd) (qdbg' . qd) nd
+    dbgcomp p = DbgBin DbgOr pdbg' qdbg' p
+
     (pv, qv) = case v of
       P pv qv -> (pv, qv)
       _ -> (E, E)
@@ -393,97 +402,8 @@ advance nid eid ios rsp@(Syn (Free (Or p q next))) v
       (E, E) -> v
       (_, _) -> P pv' qv'
 
-    (eid', ios', p', pv') = advance nid eid ios p pv
-    (eid'', ios'', q', qv') = advance nid eid' ios' q qv
-
--- advanceDbg . advanceDbg == advanceDbg
-advanceDbg
-  :: Monoid v
-  => NodeId
-  -> Int
-  -> [IO ()]
-  -> [M.Map EventId EventValue]
-  -> Syn v a
-  -> V v
-  -> (Int, [IO ()], Syn v a, DbgSyn, V v)
-
--- pure
-advanceDbg nid eid ios _ rsp@(Syn (Pure a)) v
-  = (eid, ios, rsp, DbgDone, v)
-
--- forever
-advanceDbg nid eid ios _ rsp@(Syn (Free Forever)) v
-  = (eid, ios, rsp, DbgForever, v)
-
--- await
-advanceDbg nid eid ios (m:ms) rsp@(Syn (Free (Await (Event e) next))) v
-  = case M.lookup e m of
-      Just (EventValue _ a) -> undefined
-      Nothing -> (eid, ios, rsp, DbgAwait e DbgBlocked, v)
-  -- = (eid, ios, rsp, DbgAwait e DbgDone, v)
-
--- -- view
--- advanceDbg nid eid ios rsp@(Syn (Free (View v next))) _
---   = advanceDbg nid eid ios (Syn next) (V v)
--- 
--- -- mapView
--- advanceDbg nid eid ios rsp@(Syn (Free (MapView f m next))) v
---   = case rsp' of
---       Syn (Pure a) -> advanceDbg nid eid' ios' (Syn $ next a) (V $ f (foldV v'))
---       rsp' -> (eid', ios', Syn (Free (MapView f rsp' next)), U f v')
---   where
---     (eid', ios', rsp', v') = case v of
---       U uf uv -> advanceDbg nid eid ios m (unsafeCoerce uv)
---       _ -> advanceDbg nid eid ios m E
--- 
--- -- local
--- advanceDbg nid eid ios (Syn (Free (Local f next))) v
---   = advanceDbg nid eid ios (f (Event (Internal (nid, eid))) >>= Syn . next) v
--- 
--- -- emit
--- advanceDbg nid eid ios rsp@(Syn (Free (Emit _ _))) v
---   = (eid, ios, rsp, v)
--- 
--- -- async
--- advanceDbg nid eid ios (Syn (Free (Async io next))) v
---   = advanceDbg nid eid (io:ios) (Syn next) v
--- 
--- -- and
--- advanceDbg nid eid ios rsp@(Syn (Free (And p q next))) v
---   = case (p', q') of
---       (Syn (Pure a), Syn (Pure b))
---         -> advanceDbg nid eid'' ios'' (Syn (next (a, b))) (V (foldV pv' <> foldV qv'))
---       _ -> (eid'', ios'', Syn (Free (And p' q' next)), v')
---   where
---     v' = case (pv', qv') of
---       (E, E) -> v
---       _ -> P pv' qv'
--- 
---     (pv, qv) = case v of
---       P pv qv -> (pv, qv)
---       _ -> (E, E)
--- 
---     (eid', ios', p', pv') = advanceDbg nid eid ios p pv
---     (eid'', ios'', q', qv') = advanceDbg nid eid' ios' q qv
--- 
--- advanceDbg nid eid ios rsp@(Syn (Free (Or p q next))) v
---   = case (p', q') of
---       (Syn (Pure a), _)
---         -> advanceDbg nid eid'' ios'' (Syn (next (a, (q', qv')))) (V (foldV pv'))
---       (_, Syn (Pure b))
---         -> advanceDbg nid eid'' ios'' (Syn (next (b, (p', pv')))) (V (foldV qv'))
---       _ -> (eid'', ios'', Syn (Free (Or p' q' next)), v')
---   where
---     (pv, qv) = case v of
---       P pv qv -> (pv, qv)
---       _ -> (E, E)
--- 
---     v' = case (pv', qv') of
---       (E, E) -> v
---       (_, _) -> P pv' qv'
--- 
---     (eid', ios', p', pv') = advanceDbg nid eid ios p pv
---     (eid'', ios'', q', qv') = advanceDbg nid eid' ios' q qv
+    (eid', ios', p', pdbg', pv') = advance nid eid ios p pv
+    (eid'', ios'', q', qdbg', qv') = advance nid eid' ios' q qv
 
 advanceIO
   :: Monoid v
@@ -650,15 +570,15 @@ stepOnce m' nid eid p v = do
   sequence_ ios
   pure (eid', p'', v', M.keys m, u)
   where
-    (eid', ios, p', v') = advance nid eid [] p v
+    (eid', ios, p', _, v') = advance nid eid [] p v
     m = gather p'
     (p'', u) = unblock (m' <> m) p'
 
-stepOnce' :: Monoid v => M.Map EventId EventValue -> NodeId -> Int -> Syn v a -> V v -> (Int, Syn v a, V v, M.Map EventId EventValue, [IO ()], Bool)
-stepOnce' m nid eid p v = (eid', p'', v', m', ios, u)
+stepOnce' :: Monoid v => M.Map EventId EventValue -> NodeId -> Int -> Syn v a -> V v -> (Int, Syn v a, DbgSyn -> DbgSyn, V v, M.Map EventId EventValue, [IO ()], Bool)
+stepOnce' m nid eid p v = (eid', p'', dbg, v', m', ios, u)
   where
     (p', u) = unblock m p
-    (eid', ios, p'', v') = advance nid eid [] p' v
+    (eid', ios, p'', dbg, v') = advance nid eid [] p' v
     m' = gather p''
 
 stepAll :: Monoid v => M.Map EventId EventValue -> NodeId -> Int -> Syn v a -> V v -> IO (Either (Maybe a) (Int, Syn v a), V v, [([EventId], Syn v a)])
@@ -693,7 +613,7 @@ pool f = local $ \e -> go e E $ mconcat
   ]
   where
     go e v k = do
-      (r, v', k') <- orr [ fromJust (runOrr k), view (foldV v) >> forever ]
+      (r, v', k') <- orr [ fromJust (runOrr k) ]
 
       case r of
         Left a -> pure a
@@ -752,7 +672,7 @@ newTrail (Context nid ctx) = do
     , trAdvance = modifyMVar ctx $ \ctx' -> case ctx' of
         Nothing -> pure (Nothing, (Nothing, E))
         Just (eid, p, v) -> do
-          let (eid', ios, p', v') = advance nid eid [] p v
+          let (eid', ios, p', _, v') = advance nid eid [] p v
           sequence_ ios
           case p' of
             Syn (Pure a) -> pure (Just (eid', p', v'), (Just a, v'))
