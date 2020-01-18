@@ -39,6 +39,9 @@ mapView f (VSyn p) = VSyn $ R.ReaderT $ \(path, e') -> Syn.local' (<>) $ \e -> d
           Syn.emit e' (fmap (second f) v)
           go path e e'
 
+forever :: VSyn v a
+forever = liftSyn Syn.forever
+
 await :: Syn.Event t a -> VSyn v a
 await = liftSyn . Syn.await
 
@@ -63,9 +66,9 @@ text txt = view [R.VText txt] []
 div_ :: [VSyn R.HTML a] -> VSyn R.HTML a
 div_ children = view [R.VNode "div" mempty []] children
 
-runView :: VSyn v a -> Syn.Syn () (Either a ([ViewPatch v], VSyn v a))
-runView (VSyn vp) = Syn.local' (<>) $ \e -> do
-  (r, (ks, _)) <- Syn.orr' (Left <$> R.runReaderT vp ([], e)) (Right <$> Syn.await e)
+runView :: Syn.Event Syn.Internal [ViewPatch v] -> VSyn v a -> Syn.Syn () (Either a ([ViewPatch v], VSyn v a))
+runView e (VSyn vp) = do
+  (r, (ks, _)) <- Syn.orr' (Right <$> Syn.await e) (Left <$> R.runReaderT vp ([0], e))
   case r of
     Left a  -> pure (Left a)
     Right v -> pure (Right (v, liftSyn (left <$> ks)))
@@ -73,17 +76,35 @@ runView (VSyn vp) = Syn.local' (<>) $ \e -> do
   where
     left (Left a) = a
 
-v e = do
-  div_ [ div_ [ text "bla", await e ] ]
-  div_ [ text "Done" ]
-
-testView = Syn.local $ \g -> do
-  r <- runView (v g)
-  case r of
-    Left a -> pure (Left a)
-    Right (v', next) -> do
-      r <- Syn.orr [Left <$> runView next, Right <$> (Syn.emit g 7 >> Syn.forever)]
+replayView :: VSyn v a -> [Syn.EventValue] -> Syn.Syn () (Maybe a, [[ViewPatch v]])
+replayView v es = Syn.local $ \dummy -> Syn.local' (<>) $ \e -> go e [] v (es <> [Syn.EventValue dummy ()])
+  where
+    go :: Syn.Event Syn.Internal [ViewPatch v] -> [[ViewPatch v]] -> VSyn v a -> [Syn.EventValue] -> Syn.Syn () (Maybe a, [[ViewPatch v]])
+    go ve vps _ [] = pure (Nothing, vps)
+    go ve vps v (e:es) = Syn.local $ \dummy -> do
+      (r, (ks, _)) <- Syn.orr' (Left <$> runView ve v) (Right <$> (Syn.emitValue e))
       case r of
-        Left (Left a') -> pure (Left a')
-        Left (Right (v'', next')) -> pure (Right (map fst v'))
-        Right a -> pure (Left ())
+        Left (Left a) -> pure (Just a, vps)
+        Left (Right (vp, next)) -> go ve (vp:vps) next es
+        Right _ -> go ve vps (liftSyn (left . left <$> ks)) es
+
+    left (Left a) = a
+
+v e = do
+  div_ [ div_ [ text "bla", v2 ] ]
+  div_ [ text "Done", await e ]
+  div_ [ text "Done" ]
+  where
+    v2 = do
+      div_ [ await e ]
+      div_ [ await e ]
+      div_ [ await e ]
+
+testView = Syn.local $ \d -> Syn.local $ \g -> fmap (fmap (fmap (fmap fst))) $ do
+  replayView (v g)
+    [ Syn.EventValue g 5
+    , Syn.EventValue g 6
+    , Syn.EventValue g 6
+    , Syn.EventValue g 6
+    , Syn.EventValue g 6
+    ]

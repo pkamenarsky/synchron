@@ -148,6 +148,9 @@ local' conc f = Syn $ liftF (Local conc f id)
 emit :: Event Internal a -> a -> Syn v ()
 emit e a = Syn $ liftF (Emit (EventValue e a) ())
 
+emitValue :: EventValue -> Syn v ()
+emitValue (EventValue e a) = Syn $ liftF (Emit (EventValue e a) ())
+
 await :: Event t a -> Syn v a
 await e = Syn $ liftF (Await e id)
 
