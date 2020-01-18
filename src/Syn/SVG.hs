@@ -1,6 +1,8 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE TupleSections #-}
 
 module Syn.SVG where
 
@@ -33,12 +35,12 @@ data GSyn
 data TSyn w
   = TDone w
   | TBlocked w
+  | TForever w
   | TAwait w Syn.EventId (TSyn w)
   | TEmit w Syn.EventId (TSyn w)
-  | TForever w
   | TJoin (TSyn w)
   | TBin w BinOp (TSyn w) (TSyn w) (TSyn w)
-  deriving (Eq, Show)
+  deriving (Eq, Show, Functor)
 
 wrapG :: GSyn -> TSyn ()
 wrapG GDone = TDone ()
@@ -74,48 +76,84 @@ evColor (External (_, c)) = color c
 type W = Int
 type H = Int
 
-data G = L W H Char | B BinOp Bool W H G G | E W H deriving Show
+type Pictogram = String
+
+data G = L W H Pictogram | B BinOp Bool W H G G | E W H deriving Show
 
 gw :: G -> W
 gw (L w _ _) = w
+gw (E w _) = w
 gw (B _ _ w _ _ _) = w
 
 gh :: G -> H
 gh (L _ h _) = h
+gh (E _ h) = h
 gh (B _ _ _ h _ _) = h
 
-labelWidth :: TSyn () -> (TSyn W, W)
-labelWidth (TDone _) = (TDone 2, 2)
-labelWidth (TBlocked _) = (TBlocked 2, 2)
-labelWidth (TForever _) = (TForever 2, 2)
-labelWidth (TAwait _ e next) = (TAwait w e p, w)
+roww = 2
+
+drawG :: G -> [String]
+drawG (L w h c) = r (ss w) (h - 1) <> [c <> ss (w - 1)]
+drawG (E w h) = r (ss w) h
+drawG (B op draw w h p q) = (if draw then header else []) <> ls -- zipWith (<>) (drawG p) (drawG q)
   where
-    (p, w) = labelWidth next
-labelWidth (TEmit _ e next) = (TEmit w e p, w)
+    ls =
+      [ fromMaybe (ss (gw p)) l <> fromMaybe (ss (gw q)) r
+      | (l, r) <- zipPadF (drawG p) (drawG q)
+      ]
+
+    top GAnd = "∧"
+    top GOr = "∨"
+
+    header = [ top op <> ss (w - 1), r '—' (w - 1) <> [' '] ]
+
+drawGs :: [G] -> [String]
+drawGs = concatMap drawG
+
+pprintG :: [G] -> IO ()
+pprintG = void . traverse putStrLn . drawGs
+
+labelWidth :: W -> TSyn () -> (TSyn W, W) -- returned W >= passed W
+labelWidth parw (TDone _) = (TDone parw, parw)
+labelWidth parw (TBlocked _) = (TBlocked parw, parw)
+labelWidth parw (TForever _) = (TForever parw, parw)
+labelWidth parw (TAwait _ e next) = (TAwait w e p, w)
   where
-    (p, w) = labelWidth next
-labelWidth (TBin _ op p q d) = (TBin (max (pw + qw) dw) op p' q' d', max (pw + qw) dw)
+    (p, w) = labelWidth parw next
+labelWidth parw (TEmit _ e next) = (TEmit w e p, w)
   where
-    (p', pw) = labelWidth p
-    (q', qw) = labelWidth q
-    (d', dw) = labelWidth d
-labelWidth (TJoin p) = (TJoin p', w)
+    (p, w) = labelWidth parw next
+labelWidth parw (TBin _ op p q d) = (TBin dw op p' q' d', dw)
   where
-    (p', w) = labelWidth p
+    (p', pw) = labelWidth roww p
+    (q', qw) = labelWidth roww q
+    (d', dw) = labelWidth (max (pw + qw) parw) d
+labelWidth parw (TJoin p) = (TJoin p', w)
+  where
+    (p', w) = labelWidth parw p
+
+toG p = go l
+  where
+    t = toTSyn' (toDbgSyn p DbgDone)
+    l = (,True) <$> fst (labelWidth roww t)
+
+    go g = case showG g of
+      (g', Just n) -> g':go n
+      (g', _) -> [g']
+
+testG (g:gs) = all ((== gw g) . gw) (g:gs)
 
 -- TODO: width from above :D do in labelWidth
 showG :: TSyn (W, Bool) -> (G, Maybe (TSyn (W, Bool)))
-showG (TDone (w, _)) = (L w 1 '◆', Nothing)
-showG (TForever (w, _)) = (L w 1 '∞', Nothing)
+showG (TDone (w, _)) = (L w 1 "◆", Nothing)
 showG (TBlocked (w, _)) = (E w 1, Nothing)
-showG (TAwait (w, _) e next) = (L w 1 '○', Just next)
-showG (TEmit (w, _) e next) = (L w 1 '▲', Just next)
-showG (TBin (w, draw) op p q d) =
-  ( pq
-  , case (p', q') of
-      (Nothing, Nothing) -> Just d
-      otherwise -> Just (TBin (w, False) op (fromMaybe (TBlocked (gw pg, False)) p') (fromMaybe (TBlocked (gw qg, False)) q') d)
-  )
+showG (TForever (w, _)) = (L w 1 "∞", Nothing)
+showG (TAwait (w, _) e next) = (L w 1 (evColor e "○"), Just next)
+showG (TEmit (w, _) e next) = (L w 1 (evColor e "▲"), Just next)
+showG (TJoin next) = showG next
+showG (TBin (w, draw) op p q d) = case (pg, qg) of
+  (E _ _, E _ _) -> showG d
+  otherwise -> (pq, Just (TBin (w, False) op (fromMaybe (TBlocked (gw pg, False)) p') (fromMaybe (TBlocked (gw qg, False)) q') d))
   where
     (pg, p') = showG p
     (qg, q') = showG q
@@ -124,7 +162,7 @@ showG (TBin (w, draw) op p q d) =
     adjustH h (L w _ c) = L w h c
     -- only adjust height if no header drawn
     adjustH h (B op False bw _ p q) = B op False bw h (adjustH h p) (adjustH h q)
-    adjustH h b = b
+    adjustH _ b = b
 
     mh = max (gh pg) (gh qg)
 
@@ -240,7 +278,7 @@ pprintProgram p = void $ traverse putStrLn (showProgram' ((reverse $ toGSyn p)))
 
 pprintProgram2 p = void $ traverse putStrLn (concat $ fst $ showTSyn (toTSyn' (toDbgSyn p DbgDone)))
 
-pprintProgram3 p = fst $ labelWidth $ toTSyn' (toDbgSyn p DbgDone)
+pprintProgram3 p = fst $ labelWidth roww $ toTSyn' (toDbgSyn p DbgDone)
 
 showTrail :: GSyn -> [String]
 showTrail = fst3 . go
