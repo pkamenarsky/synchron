@@ -257,8 +257,8 @@ toGSyn = go mempty 0 []
     convert (Syn (Pure _)) = GDone
     convert (Syn (Free Forever)) = GForever
     convert (Syn (Free (MapView _ p _))) = convert p
-    convert (Syn (Free (Await (Event e) _))) = GAwait e
-    convert (Syn (Free (Emit (EventValue (Event e) _) _))) = GEmit e
+    convert (Syn (Free (Await (Event _ e) _))) = GAwait e
+    convert (Syn (Free (Emit (EventValue (Event _ e) _) _))) = GEmit e
     convert (Syn (Free (Or p q _))) = GBin GOr (convert p) (convert q)
     convert (Syn (Free (And p q _))) = GBin GAnd (convert p) (convert q)
 

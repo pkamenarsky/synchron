@@ -44,8 +44,10 @@ data EventId = Internal (NodeId, Int) | External (NodeId, Int)
 data Internal
 data External
 
-data Event t a = Event EventId
-  deriving Show
+data Event t a = Event (a -> a -> a) EventId
+
+instance Show (Event t a) where
+  show (Event _ e) = "Event " <> show e
 
 data EventValue = forall t a. EventValue (Event t a) a
 
@@ -71,7 +73,7 @@ data SynF v next
   | forall a. Remote (IO (Trail v a)) (a -> next)
   | forall a. RemoteU (Trail v a) (a -> next)
 
-  | forall a b. Local (Event Internal a -> Syn v b) (b -> next)
+  | forall a b. Local (a -> a -> a) (Event Internal a -> Syn v b) (b -> next)
   | Emit EventValue next
   | forall t a. Await (Event t a) (a -> next)
 
@@ -105,9 +107,9 @@ instance Show (Syn v a) where
   show (Syn (Free Forever)) = "∞"
   show (Syn (Free (MapView _ m _))) = "MapView (" <> show m <> ")"
   show (Syn (Free (View _ _))) = "View"
-  show (Syn (Free (Local _ _))) = "Local"
-  show (Syn (Free (Emit (EventValue (Event e) _) _))) = evColor e "▲"
-  show (Syn (Free (Await (Event e) _))) = evColor e "○"
+  show (Syn (Free (Local _ _ _))) = "Local"
+  show (Syn (Free (Emit (EventValue (Event _ e) _) _))) = evColor e "▲"
+  show (Syn (Free (Await (Event _ e) _))) = evColor e "○"
   show (Syn (Free (Or a b _))) = "∨ [" <> intercalate ", " (map show [a, b]) <> "]"
   show (Syn (Free (And a b _))) = "∧ [" <> show a <> ", " <> show b <> "]"
 
@@ -138,7 +140,10 @@ view :: v -> Syn v ()
 view v = Syn $ liftF (View v ())
 
 local :: (Event Internal a -> Syn v b) -> Syn v b
-local f = Syn $ liftF (Local f id)
+local f = Syn $ liftF (Local const f id)
+
+local' :: (a -> a -> a) -> (Event Internal a -> Syn v b) -> Syn v b
+local' conc f = Syn $ liftF (Local conc f id)
 
 emit :: Event Internal a -> a -> Syn v ()
 emit e a = Syn $ liftF (Emit (EventValue e a) ())
@@ -234,7 +239,7 @@ unblock
 unblock _ rsp@(Syn (Pure a)) = (rsp, False)
 
 -- local
-unblock _ rsp@(Syn (Free (Local _ _))) = (rsp, False)
+unblock _ rsp@(Syn (Free (Local _ _ _))) = (rsp, False)
 
 -- mapView
 unblock m rsp@(Syn (Free (MapView f v next))) = (Syn (Free (MapView f v' next)), b)
@@ -245,7 +250,7 @@ unblock m rsp@(Syn (Free (MapView f v next))) = (Syn (Free (MapView f v' next)),
 unblock _ rsp@(Syn (Free Forever)) = (rsp, False)
 
 -- await
-unblock m rsp@(Syn (Free (Await (Event eid') next)))
+unblock m rsp@(Syn (Free (Await (Event _ eid') next)))
   = case M.lookup eid' m of
       Just (EventValue _ a) -> (Syn (next $ unsafeCoerce a), True)
       Nothing -> (rsp, False)
@@ -284,7 +289,7 @@ unblockIO m rsp@(Syn (Free (MapView f v next))) = do
 unblockIO _ rsp@(Syn (Free Forever)) = pure (rsp, False)
 
 -- await
-unblockIO m rsp@(Syn (Free (Await (Event eid') next)))
+unblockIO m rsp@(Syn (Free (Await (Event _ eid') next)))
   = case M.lookup eid' m of
       Just (EventValue _ a) -> pure (Syn (next $ unsafeCoerce a), True)
       Nothing -> pure (rsp, False)
@@ -346,7 +351,7 @@ advance nid eid ios rsp@(Syn (Free Forever)) v
   = (eid, ios, rsp, \_ -> DbgForever, v)
 
 -- await
-advance nid eid ios rsp@(Syn (Free (Await (Event e) _))) v
+advance nid eid ios rsp@(Syn (Free (Await (Event _ e) _))) v
   = (eid, ios, rsp, \dnext -> DbgAwait e dnext, v)
 
 -- view
@@ -364,11 +369,11 @@ advance nid eid ios rsp@(Syn (Free (MapView f m next))) v
       _ -> advance nid eid ios m E
 
 -- local
-advance nid eid ios (Syn (Free (Local f next))) v
-  = advance nid (eid + 1) ios (f (Event (Internal (nid, eid))) >>= Syn . next) v
+advance nid eid ios (Syn (Free (Local conc f next))) v
+  = advance nid (eid + 1) ios (f (Event conc (Internal (nid, eid))) >>= Syn . next) v
 
 -- emit
-advance nid eid ios rsp@(Syn (Free (Emit (EventValue (Event e) _) _))) v
+advance nid eid ios rsp@(Syn (Free (Emit (EventValue (Event _ e) _) _))) v
   = (eid, ios, rsp, \dbg -> DbgEmit e dbg, v)
 
 -- async
@@ -459,8 +464,8 @@ advanceIO nid eid ios rsp@(Syn (Free (MapView f m next))) v = do
     rsp' -> pure (eid', ios', Syn (Free (MapView f rsp' next)), U f v')
 
 -- local
-advanceIO nid eid ios (Syn (Free (Local f next))) v
-  = advanceIO nid (eid + 1) ios (f (Event (Internal (nid, eid))) >>= Syn . next) v
+advanceIO nid eid ios (Syn (Free (Local conc f next))) v
+  = advanceIO nid (eid + 1) ios (f (Event conc (Internal (nid, eid))) >>= Syn . next) v
 
 -- emit
 advanceIO nid eid ios rsp@(Syn (Free (Emit _ _))) v
@@ -525,6 +530,9 @@ advanceIO nid eid ios rsp@(Syn (Free (Or p q next))) v = do
 
 -- gather ----------------------------------------------------------------------
 
+concatEventValues :: EventValue -> EventValue -> EventValue
+concatEventValues (EventValue e@(Event conc _) a) (EventValue _ b) = EventValue e (a `conc` unsafeCoerce b)
+
 gather
   :: Syn v a
   -> M.Map EventId EventValue
@@ -533,7 +541,7 @@ gather
 gather (Syn (Pure _)) = M.empty
 
 -- local
-gather (Syn (Free (Local _ _))) = M.empty
+gather (Syn (Free (Local _ _ _))) = M.empty
 
 -- mapview
 gather (Syn (Free (MapView _ m next))) = gather m
@@ -545,13 +553,13 @@ gather (Syn (Free Forever)) = M.empty
 gather (Syn (Free (Await _ _))) = M.empty
 
 -- emit
-gather (Syn (Free (Emit e@(EventValue (Event ei) _) next))) = M.singleton ei e
+gather (Syn (Free (Emit e@(EventValue (Event conc ei) _) next))) = M.singleton ei e
 
 -- and
-gather (Syn (Free (And p q next))) = gather q <> gather p
+gather (Syn (Free (And p q next))) = M.unionWith concatEventValues (gather q) (gather p)
 
 -- or
-gather (Syn (Free (Or p q next))) = gather q <> gather p
+gather (Syn (Free (Or p q next))) = M.unionWith concatEventValues (gather q) (gather p)
 
 gatherIO
   :: Syn v a
@@ -570,16 +578,16 @@ gatherIO (Syn (Free Forever)) = pure M.empty
 gatherIO (Syn (Free (Await _ _))) = pure M.empty
 
 -- emit
-gatherIO (Syn (Free (Emit e@(EventValue (Event ei) _) next))) = pure (M.singleton ei e)
+gatherIO (Syn (Free (Emit e@(EventValue (Event _ ei) _) next))) = pure (M.singleton ei e)
 
 -- remote
 gatherIO (Syn (Free (RemoteU trail _))) = trGather trail
 
 -- and
-gatherIO (Syn (Free (And p q next))) = gatherIO q <> gatherIO p
+gatherIO (Syn (Free (And p q next))) = M.unionWith concatEventValues <$> gatherIO q <*> gatherIO p
 
 -- or
-gatherIO (Syn (Free (Or p q next))) = gatherIO q <> gatherIO p
+gatherIO (Syn (Free (Or p q next))) = M.unionWith concatEventValues <$> gatherIO q <*> gatherIO p
 
 --------------------------------------------------------------------------------
 
@@ -605,9 +613,9 @@ stepAll = go []
     go es m nid eid p v = do
       (eid', p', v', eks, u) <- stepOnce m nid eid p v
 
-      traceIO ("> " <> show p <> ", Events: " <> intercalate "," (map (flip evColor "▲") eks) <> ", U: " <> show u)
-      traceIO ("< " <> show p')
-      traceIO ""
+      -- traceIO ("> " <> show p <> ", Events: " <> intercalate "," (map (flip evColor "▲") eks) <> ", U: " <> show u)
+      -- traceIO ("< " <> show p')
+      -- traceIO ""
 
       case (p', u) of
         (Syn (Pure a), _) -> pure (Left (Just a), v', (eks, p):es)
@@ -653,8 +661,11 @@ spawn (Pool e) p = do
 nextId :: IORef Int
 nextId = unsafePerformIO (newIORef 0)
 
-newEvent :: NodeId -> IO (Event External b)
-newEvent nid = Event . External <$> atomicModifyIORef' nextId (\eid -> (eid + 1, (nid, eid)))
+newEvent :: NodeId -> IO (Event External a)
+newEvent nid = Event const . External <$> atomicModifyIORef' nextId (\eid -> (eid + 1, (nid, eid)))
+
+newEvent' :: (a -> a -> a) -> NodeId -> IO (Event External a)
+newEvent' conc nid = Event conc . External <$> atomicModifyIORef' nextId (\eid -> (eid + 1, (nid, eid)))
 
 data Context v a = Context NodeId (MVar (Maybe (Int, Syn v a, V v)))
 
@@ -664,9 +675,9 @@ run :: NodeId -> Syn v a -> IO (Context v a)
 run nid p = Context nid <$> newMVar (Just (0, p, E))
 
 push :: Typeable v => Monoid v => Context v b -> Event t a -> a -> IO (Maybe b, v)
-push (Context nid v) (Event ei) a = modifyMVar v $ \v -> case v of
+push (Context nid v) (Event conc ei) a = modifyMVar v $ \v -> case v of
   Just (eid, p, v) -> do
-    r <- stepAll (M.singleton (setNid ei') (EventValue (Event ei') a)) nid eid p v
+    r <- stepAll (M.singleton (setNid ei') (EventValue (Event conc ei') a)) nid eid p v
 
     case r of
       (Left a, v', _) -> pure (Nothing, (a, foldV v'))
