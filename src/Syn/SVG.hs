@@ -133,6 +133,7 @@ labelWidth parw (TJoin p) = (TJoin p', w)
   where
     (p', w) = labelWidth parw p
 
+toG :: Monoid v => Syn v a -> [G]
 toG p = go l
   where
     t = toTSyn' (toDbgSyn p DbgDone)
@@ -145,11 +146,14 @@ toG p = go l
 testG (g:gs) = all ((== gw g) . gw) (g:gs)
 
 showG :: TSyn (W, Bool) -> (G, Maybe (TSyn (W, Bool)))
-showG (TDone (w, _)) = (L w 1 "◆", Nothing)
+-- showG (TDone (w, _)) = (L w 1 "◆", Nothing)
+showG (TDone (w, _)) = (L w 1 "D", Nothing)
 showG (TBlocked (w, _)) = (E w 1, Nothing)
 showG (TForever (w, _)) = (L w 1 "∞", Nothing)
-showG (TAwait (w, _) e next) = (L w 1 (evColor e "○"), Just next)
-showG (TEmit (w, _) e next) = (L w 1 (evColor e "▲"), Just next)
+showG (TAwait (w, _) e next) = (L w 1 ("A"), Just next)
+-- showG (TAwait (w, _) e next) = (L w 1 (evColor e "○"), Just next)
+showG (TEmit (w, _) e next) = (L w 1 ("E"), Just next)
+-- showG (TEmit (w, _) e next) = (L w 1 (evColor e "▲"), Just next)
 showG (TJoin next) = showG next
 showG (TBin (w, draw) op p q d) = case (pg, qg) of
   (E _ _, E _ _) -> showG d
@@ -418,8 +422,8 @@ aR rx ry xrot largeFlag sweepFlag x y = T.concat
   [ "a ", toText rx, ",", toText ry, " ", toText xrot, " ", T.pack (show largeFlag)
   , " ", T.pack (show sweepFlag), " ", toText x, " ", toText y, " "]
 
-trail :: Text -> Double -> Double -> Double -> Double -> Double -> Element
-trail color x y width height coffset = mconcat
+trail' :: Text -> Double -> Double -> Double -> Double -> Double -> Element
+trail' color x y width height r = mconcat
   [ path_
       [ D_ <<- (mA x y <> vR height <> aR (width / 2) (width /2) 0 1 0 width 0 <> vR (-height) <> z)
       , Fill_ <<- color
@@ -427,29 +431,34 @@ trail color x y width height coffset = mconcat
   , mconcat
       [ circle_
           [ Cx_ <<- t (x + (width / 2))
-          , Cy_ <<- t (y + yo + 5 + (width / 2))
-          , R_ <<- t (width / 2 - coffset)
+          , Cy_ <<- t (y + height)
+          , R_ <<- t r
           , Fill_ <<- "#ddd"
           , Class_ <<- "circle"
           ]
-      | yo <- [0,16..height-20]
       ]
   ]
   where
     t = T.pack . show
 
-dtrail :: Text -> Double -> Double -> Double -> Element
-dtrail color x y height = mconcat
-  [ trail color x y 29 height 10
-  , trail "#ddd" (x + 3) (y + 3) 10 (height - 20) 10
-  , trail "#ddd" (x + 16) (y + 3) 10 (height - 50) 10
+trail :: Text -> Double -> Double -> Double -> Double -> Double -> Element
+trail color x y width height r = mconcat
+  [ path_
+      [ D_ <<- (mA x y <> vR height <> aR (width / 2) (width /2) 0 1 0 width 0 <> vR (-height) <> z)
+      , Fill_ <<- color
+      ]
+  , mconcat
+      [ circle_
+          [ Cx_ <<- t (x + (width / 2))
+          , Cy_ <<- t (y + height)
+          , R_ <<- t r
+          , Fill_ <<- "#ddd"
+          , Class_ <<- "circle"
+          ]
+      ]
   ]
-
-trails =
-  [ trail "#333" (100 + x * 42) 100 14 (height * 40) 5
-  -- [ dtrail "#333" (100 + x * 60) 100 (height * 60)
-  | (x, height) <- zip [0..10] [4, 5, 7, 2, 6, 12, 8, 11, 9, 4, 6, 10 ]
-  ]
+  where
+    t = T.pack . show
 
 generateSVG style t = mconcat $ intersperse "\n"
   [ "<?xml version=\"1.0\" encoding=\"iso-8859-1\"?>"
@@ -462,6 +471,54 @@ generateSVG style t = mconcat $ intersperse "\n"
   , show t
   , "</svg>"
   ]
+
+gridw = 16
+gridh = 30
+gridx = 50
+gridy = 50
+
+tox x = gridx + fromIntegral x * gridw
+toy y = gridy + fromIntegral y * gridh
+
+tow w = fromIntegral w * gridw
+toh h = fromIntegral h * gridh
+
+gridTrail :: Int -> Int -> Int -> Element
+gridTrail x y h = trail' "#333" (tox x) (toy y) (tow 1) (toh h) (gridw / 4)
+
+gsvg = gridTrail 0 0 5
+
+svgG :: Int -> Int -> G -> Element
+svgG x y (L _ h c) = gridTrail x y h
+svgG x y (E _ _) = mempty
+svgG x y (B op draw w h p q) = mconcat
+  [ svgG x (y + h - gh p) p
+  , svgG (x + gw p) (y + h - gh q) q
+  , if draw
+      then path_
+        -- [ D_ <<- (mA (tox x) (toy (y + 1) - (gridh / 3)) <> hR (tow (w - 1)))
+        [ D_ <<- (mA (tox x) (toy (y + 1) - (gridh / 3) - 2) <> lR tm 0 <> lR tx (-ty) <> lR tx ty <> lR tm 0) 
+        , Stroke_width_ <<- "3px"
+        , Stroke_ <<- "#333"
+        , Fill_ <<- "transparent"
+        ]
+      else mempty
+  ]
+  where
+    tw = tow (w - 1)
+    tx = 6
+    ty = case op of
+      GAnd -> 6
+      GOr -> (-6)
+
+    tm = tw / 2 - tx
+
+svgGs _ [] = mempty
+svgGs h (g:gs) = svgGs (h + h') gs <> svgG 0 h g
+  where
+    h' = gh g
+
+makeSvg e = writeFile "out.svg" (generateSVG "" e)
 
 -- main :: IO ()
 -- main = do
