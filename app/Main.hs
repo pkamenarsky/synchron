@@ -32,7 +32,7 @@ import Network.Wai
 import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai.Handler.Replica as Replica
 
-import Prelude hiding (div)
+import Prelude hiding (div, forever)
 
 -- testConcur :: IO ()
 -- testConcur = Log.logger $ \log -> do
@@ -203,18 +203,18 @@ testReplica = do
     div [ style [("color", "green")], onClick ] [ text "Synchron2" ]
     div [ style [("color", "blue")] ] [ text "Synchron3" ]
 
-inputOnEnter v = do
-  e <- input [ autofocus True, placeholder "Enter", value v, Left <$> onInput, Right <$> onKeyDown ]
+inputOnEnter p v = do
+  e <- input [ autofocus True, placeholder p, value v, Left <$> onInput, Right <$> onKeyDown ]
   case e of
-    Left e  -> inputOnEnter (targetValue $ target e)
+    Left e  -> inputOnEnter p (targetValue $ target e)
     Right e -> if kbdKey e == "Enter"
       then pure v
-      else inputOnEnter v
+      else inputOnEnter p v
 
 addition = do
-  a <- inputOnEnter ""
+  a <- inputOnEnter "X" ""
   button [ onClick ] [ text "Next" ]
-  b <- inputOnEnter ""
+  b <- inputOnEnter "Y" ""
   button [ onClick ] [ text "Add" ]
   div [ onClick ] [ text ("Result :" <> T.pack (show (read (T.unpack a) + read (T.unpack b)))) ]
   addition
@@ -252,3 +252,58 @@ shared = local $ \end -> local $ \st -> pool $ \p -> do
 background = div
   [ style [("backgroundColor", "#d4dde0"), ("width", "100%"), ("height", "100%"), ("padding", "0px"), ("margin", "0px")] ]
   [ div [ style [("fontFamily", "monospace"), ("fontWeight", "500"), ("color", "#4b5060")] ] [ text "Hello" ] ]
+
+--------------------------------------------------------------------------------
+
+testDist = do
+    ctx <- run (NodeId 1) (counter 0)
+
+    let remoteCounter = newTrail ctx
+
+    run (NodeId 0) $ local $ \e -> do
+      div [] [ remote remoteCounter, remote remoteCounter ]
+
+  where
+    counter x = do
+      div [ onClick ] [ text (T.pack $ show x) ]
+      counter (x + 1)
+
+--------------------------------------------------------------------------------
+
+data Todo = Todo
+  { task :: T.Text
+  , done :: Bool
+  }
+
+l = Left
+r = Right
+
+ll = l . l
+lr = l . r
+rl = r . l
+rr = r . r
+
+todo' p = do
+  t <- inputOnEnter "What needs to be done?" ""
+  spawn p (todo' p)
+  todo (Todo t False)
+
+todo t = do
+  r <- div []
+    [ ll <$> input [ type_ "checkbox", checked (done t), onChange ]
+    , rl <$> ttext (task t)
+    , rr <$> div [ onClick ] [ text "x" ]
+    ]
+  case r of
+    Right (Left task') -> do
+      todo (t { task = task' })
+    Left (Left _) -> do
+      todo (t { done = not (done t) })
+    Right (Right _) -> pure ()
+
+  where
+    ttext t = do
+      div [ onDoubleClick ] [ text t ]
+      inputOnEnter "" t
+
+todos = pool todo'
