@@ -31,50 +31,29 @@ data GSyn
   deriving (Eq, Show)
 
 data TSyn w
-  = TDone
-  | TBlocked
+  = TDone w
+  | TBlocked w
   | TAwait w Syn.EventId (TSyn w)
   | TEmit w Syn.EventId (TSyn w)
-  | TForever
+  | TForever w
   | TJoin (TSyn w)
   | TBin w BinOp (TSyn w) (TSyn w) (TSyn w)
   deriving (Eq, Show)
 
 wrapG :: GSyn -> TSyn ()
-wrapG GDone = TDone
-wrapG (GAwait e) = TAwait () e TDone
-wrapG (GEmit e) = TEmit () e TDone
-wrapG GForever = TForever
-wrapG (GBin op p q) = TBin () op (wrapG p) (wrapG q) TDone
-
-type Width = Int
-
-labelWidth :: TSyn () -> (TSyn Width, Width)
-labelWidth TDone = (TDone, 1)
-labelWidth TBlocked = (TBlocked, 1)
-labelWidth TForever = (TForever, 1)
-labelWidth (TAwait _ e next) = (TAwait w e p, w)
-  where
-    (p, w) = labelWidth next
-labelWidth (TEmit _ e next) = (TEmit w e p, w)
-  where
-    (p, w) = labelWidth next
-labelWidth (TBin _ op p q d) = (TBin (max (pw + qw) dw) op p' q' d', max (pw + qw) dw)
-  where
-    (p', pw) = labelWidth p
-    (q', qw) = labelWidth q
-    (d', dw) = labelWidth d
-labelWidth (TJoin p) = (TJoin p', w)
-  where
-    (p', w) = labelWidth p
+wrapG GDone = TDone ()
+wrapG (GAwait e) = TAwait () e (TDone ())
+wrapG (GEmit e) = TEmit () e (TDone ())
+wrapG GForever = TForever ()
+wrapG (GBin op p q) = TBin () op (wrapG p) (wrapG q) (TDone ())
 
 toTSyn' :: DbgSyn -> TSyn ()
-toTSyn' DbgDone = TDone
-toTSyn' DbgBlocked = TBlocked
+toTSyn' DbgDone = TDone ()
+toTSyn' DbgBlocked = TBlocked ()
 toTSyn' (DbgAwait e next) = TAwait () e (toTSyn' next)
 toTSyn' (DbgEmit e next) = TEmit () e (toTSyn' next)
 toTSyn' (DbgJoin next) = TJoin (toTSyn' next)
-toTSyn' DbgForever = TForever
+toTSyn' DbgForever = TForever ()
 toTSyn' (DbgBin op p q next) = TBin () (toTOp op) (toTSyn' (p DbgBlocked)) (toTSyn' (q DbgBlocked)) (toTSyn' next)
   where
     toTOp DbgAnd = GAnd
@@ -92,22 +71,69 @@ evColor :: EventId -> String -> String
 evColor (Internal (_, c)) = color c
 evColor (External (_, c)) = color c
 
-data Block = Unary String | Binary Int BinOp [Block] [Block]
+type W = Int
+type H = Int
 
-comb :: [Block] -> [Block] -> [Block]
-comb (Unary s:as) (Unary t:bs) = Unary (s <> " " <> t):comb as bs
+data G = L W H Char | B BinOp Bool W H G G | E W H deriving Show
 
-printLine1 :: TSyn () -> ([Block], Int)
-printLine1 TDone = ([Unary "◆"], 1)
-printLine1 TBlocked = ([], 1)
-printLine1 (TAwait _ e next) = ([Unary (evColor e "○")] <> t, w)
+gw :: G -> W
+gw (L w _ _) = w
+gw (B _ _ w _ _ _) = w
+
+gh :: G -> H
+gh (L _ h _) = h
+gh (B _ _ _ h _ _) = h
+
+labelWidth :: TSyn () -> (TSyn W, W)
+labelWidth (TDone _) = (TDone 2, 2)
+labelWidth (TBlocked _) = (TBlocked 2, 2)
+labelWidth (TForever _) = (TForever 2, 2)
+labelWidth (TAwait _ e next) = (TAwait w e p, w)
   where
-    (t, w) = printLine1 next
+    (p, w) = labelWidth next
+labelWidth (TEmit _ e next) = (TEmit w e p, w)
+  where
+    (p, w) = labelWidth next
+labelWidth (TBin _ op p q d) = (TBin (max (pw + qw) dw) op p' q' d', max (pw + qw) dw)
+  where
+    (p', pw) = labelWidth p
+    (q', qw) = labelWidth q
+    (d', dw) = labelWidth d
+labelWidth (TJoin p) = (TJoin p', w)
+  where
+    (p', w) = labelWidth p
+
+-- TODO: width from above :D do in labelWidth
+showG :: TSyn (W, Bool) -> (G, Maybe (TSyn (W, Bool)))
+showG (TDone (w, _)) = (L w 1 '◆', Nothing)
+showG (TForever (w, _)) = (L w 1 '∞', Nothing)
+showG (TBlocked (w, _)) = (E w 1, Nothing)
+showG (TAwait (w, _) e next) = (L w 1 '○', Just next)
+showG (TEmit (w, _) e next) = (L w 1 '▲', Just next)
+showG (TBin (w, draw) op p q d) =
+  ( pq
+  , case (p', q') of
+      (Nothing, Nothing) -> Just d
+      otherwise -> Just (TBin (w, False) op (fromMaybe (TBlocked (gw pg, False)) p') (fromMaybe (TBlocked (gw qg, False)) q') d)
+  )
+  where
+    (pg, p') = showG p
+    (qg, q') = showG q
+
+    adjustH :: Int -> G -> G
+    adjustH h (L w _ c) = L w h c
+    -- only adjust height if no header drawn
+    adjustH h (B op False bw _ p q) = B op False bw h (adjustH h p) (adjustH h q)
+    adjustH h b = b
+
+    mh = max (gh pg) (gh qg)
+
+    pq = B op draw w (mh + if draw then 2 else 0) (adjustH mh pg) (adjustH mh qg)
 
 showTSyn :: TSyn () -> ([[String]], Int)
-showTSyn TDone = ([["◆"]], 1)
-showTSyn TBlocked = ([], 1)
-showTSyn TForever = ([["∞"]], 1)
+showTSyn (TDone _) = ([["◆"]], 1)
+showTSyn (TBlocked _) = ([], 1)
+showTSyn (TForever _) = ([["∞"]], 1)
 showTSyn (TJoin next) = (t, w) -- ([["v" <> ss (w - 1)]] <> t, w)
   where
     (t, w) = showTSyn next
@@ -213,6 +239,8 @@ zipPadF as bs = zip
 pprintProgram p = void $ traverse putStrLn (showProgram' ((reverse $ toGSyn p)))
 
 pprintProgram2 p = void $ traverse putStrLn (concat $ fst $ showTSyn (toTSyn' (toDbgSyn p DbgDone)))
+
+pprintProgram3 p = fst $ labelWidth $ toTSyn' (toDbgSyn p DbgDone)
 
 showTrail :: GSyn -> [String]
 showTrail = fst3 . go
