@@ -186,6 +186,15 @@ instance Andd (Syn v a, Syn v b, Syn v c, Syn v d, Syn v e, Syn v f) (Syn v (a, 
 data Orr v a = Orr (Syn v (a, V v, Orr v a)) | D
   deriving (Functor, Show)
 
+-- | runOrr will always advance the failing branches, i.e. after:
+--
+--   (a, ks) <- runOrr $ mconcat [ liftOrr (emit e ()), liftOrr (await e) ]
+--
+-- ks' continuation will contain an `await` which has received the event from
+-- `emit` and thus has advanced. This is sometimes important (i.e. pools) and
+-- stems from the fact that `unblock` will advance *all* parallel branches.
+-- `advance` however takes the first successful branch and as such is left-biased.
+
 runOrr :: Orr v a -> Maybe (Syn v (a, V v, Orr v a))
 runOrr (Orr o) = Just o
 runOrr D = Nothing
