@@ -625,7 +625,7 @@ exhaust nid p = do
 
 data Pool v = Pool (Event Internal (Syn v ()))
 
-pool :: Show a => Typeable v => Monoid v => (Pool v -> Syn v a) -> Syn v a
+pool :: Typeable v => Monoid v => (Pool v -> Syn v a) -> Syn v a
 pool f = local $ \e -> go e E $ mconcat
   [ liftOrr (Right . Left <$> await e)
   , liftOrr (Left <$> f (Pool e))
