@@ -95,7 +95,7 @@ roww = 2
 drawG :: G -> [String]
 drawG (L w h c) = r (ss w) (h - 1) <> [c <> ss (w - 1)]
 drawG (E w h) = r (ss w) h
-drawG (B op draw w h p q) = (if draw then header else []) <> ls -- zipWith (<>) (drawG p) (drawG q)
+drawG (B op draw w h p q) = (if draw then header' else []) <> ls -- zipWith (<>) (drawG p) (drawG q)
   where
     ls =
       [ fromMaybe (ss (gw p)) l <> fromMaybe (ss (gw q)) r
@@ -106,6 +106,7 @@ drawG (B op draw w h p q) = (if draw then header else []) <> ls -- zipWith (<>) 
     top GOr = "∨"
 
     header = [ top op <> ss (w - 1), r '—' (w - 1) <> [' '] ]
+    header' = [ top op <> [' '] <> r '—' (w - 3) <> [' '] ]
 
 drawGs :: [G] -> [String]
 drawGs = concatMap drawG
@@ -143,7 +144,6 @@ toG p = go l
 
 testG (g:gs) = all ((== gw g) . gw) (g:gs)
 
--- TODO: width from above :D do in labelWidth
 showG :: TSyn (W, Bool) -> (G, Maybe (TSyn (W, Bool)))
 showG (TDone (w, _)) = (L w 1 "◆", Nothing)
 showG (TBlocked (w, _)) = (E w 1, Nothing)
@@ -166,7 +166,7 @@ showG (TBin (w, draw) op p q d) = case (pg, qg) of
 
     mh = max (gh pg) (gh qg)
 
-    pq = B op draw w (mh + if draw then 2 else 0) (adjustH mh pg) (adjustH mh qg)
+    pq = B op draw w (mh + if draw then 1 else 0) (adjustH mh pg) (adjustH mh qg)
 
 showTSyn :: TSyn () -> ([[String]], Int)
 showTSyn (TDone _) = ([["◆"]], 1)
