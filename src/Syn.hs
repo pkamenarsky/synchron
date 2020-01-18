@@ -553,7 +553,7 @@ gather (Syn (Free Forever)) = M.empty
 gather (Syn (Free (Await _ _))) = M.empty
 
 -- emit
-gather (Syn (Free (Emit e@(EventValue (Event conc ei) _) next))) = M.singleton ei e
+gather (Syn (Free (Emit e@(EventValue (Event _ ei) _) next))) = M.singleton ei e
 
 -- and
 gather (Syn (Free (And p q next))) = M.unionWith concatEventValues (gather q) (gather p)
