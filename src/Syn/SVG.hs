@@ -146,14 +146,14 @@ toG p = go l
 testG (g:gs) = all ((== gw g) . gw) (g:gs)
 
 showG :: TSyn (W, Bool) -> (G, Maybe (TSyn (W, Bool)))
--- showG (TDone (w, _)) = (L w 1 "◆", Nothing)
-showG (TDone (w, _)) = (L w 1 "D", Nothing)
+showG (TDone (w, _)) = (L w 1 "◆", Nothing)
+-- showG (TDone (w, _)) = (L w 1 "D", Nothing)
 showG (TBlocked (w, _)) = (E w 1, Nothing)
 showG (TForever (w, _)) = (L w 1 "∞", Nothing)
-showG (TAwait (w, _) e next) = (L w 1 ("A"), Just next)
--- showG (TAwait (w, _) e next) = (L w 1 (evColor e "○"), Just next)
-showG (TEmit (w, _) e next) = (L w 1 ("E"), Just next)
--- showG (TEmit (w, _) e next) = (L w 1 (evColor e "▲"), Just next)
+-- showG (TAwait (w, _) e next) = (L w 1 ("A"), Just next)
+showG (TAwait (w, _) e next) = (L w 1 (evColor e "○"), Just next)
+-- showG (TEmit (w, _) e next) = (L w 1 ("E"), Just next)
+showG (TEmit (w, _) e next) = (L w 1 (evColor e "▲"), Just next)
 showG (TJoin next) = showG next
 showG (TBin (w, draw) op p q d) = case (pg, qg) of
   (E _ _, E _ _) -> showG d
@@ -283,6 +283,9 @@ pprintProgram p = void $ traverse putStrLn (showProgram' ((reverse $ toGSyn p)))
 pprintProgram2 p = void $ traverse putStrLn (concat $ fst $ showTSyn (toTSyn' (toDbgSyn p DbgDone)))
 
 pprintProgram3 p = fst $ labelWidth roww $ toTSyn' (toDbgSyn p DbgDone)
+
+pprintProgram4 :: Monoid v => Syn v a -> IO ()
+pprintProgram4 = pprintG . toG
 
 showTrail :: GSyn -> [String]
 showTrail = fst3 . go
