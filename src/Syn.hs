@@ -92,17 +92,24 @@ instance (Monoid v) => Alternative (Syn v) where
   empty = forever
   a <|> b = orr [a, b]
 
+color :: Int -> String -> String
+color c s = "\ESC[" <> show (31 + (c `mod` 7)) <> "m" <> s <> "\ESC[m"
+
+evColor :: EventId -> String -> String
+evColor (Internal (_, c)) = color c
+evColor (External (_, c)) = color c
+
 instance Show (Syn v a) where
-  show (Syn (Pure a)) = "Pure"
-  show (Syn (Free (Async _ _))) = "Async"
-  show (Syn (Free Forever)) = "Forever"
+  show (Syn (Pure a)) = "◆"
+  show (Syn (Free (Async e _))) = "A"
+  show (Syn (Free Forever)) = "∞"
   show (Syn (Free (MapView _ m _))) = "MapView (" <> show m <> ")"
   show (Syn (Free (View _ _))) = "View"
   show (Syn (Free (Local _ _))) = "Local"
-  show (Syn (Free (Emit (EventValue (Event e) _) _))) = "Emit (" <> show e <> ")"
-  show (Syn (Free (Await (Event e) _))) = "Await (" <> show e <> ")"
-  show (Syn (Free (Or a b _))) = "Or [" <> intercalate ", " (map show [a, b]) <> "]"
-  show (Syn (Free (And a b _))) = "And [" <> show a <> ", " <> show b <> "]"
+  show (Syn (Free (Emit (EventValue (Event e) _) _))) = evColor e "▲"
+  show (Syn (Free (Await (Event e) _))) = evColor e "○"
+  show (Syn (Free (Or a b _))) = "∨ [" <> intercalate ", " (map show [a, b]) <> "]"
+  show (Syn (Free (And a b _))) = "∧ [" <> show a <> ", " <> show b <> "]"
 
 data DbgBinOp = DbgAnd | DbgOr deriving (Eq, Show)
 
@@ -377,6 +384,7 @@ advance nid eid ios rsp@(Syn (Free (And p q next))) v
       _ -> (eid'', ios'', Syn (Free (And p' q' next)), dbgcomp, v')
   where
     dbgcomp (DbgBin op pd qd nd) = DbgBin op (pdbg' . pd) (qdbg' . qd) nd
+    -- dbgcomp (DbgJoin p) = DbgJoin (DbgBin DbgAnd pdbg' qdbg' p)
     dbgcomp p = DbgBin DbgAnd pdbg' qdbg' p
 
     v' = case (pv', qv') of
@@ -401,6 +409,7 @@ advance nid eid ios rsp@(Syn (Free (Or p q next))) v
       _ -> (eid'', ios'', Syn (Free (Or p' q' next)), dbgcomp, v')
   where
     dbgcomp (DbgBin op pd qd nd) = DbgBin op (pdbg' . pd) (qdbg' . qd) nd
+    dbgcomp (DbgJoin p) = DbgJoin (DbgBin DbgOr pdbg' qdbg' p)
     dbgcomp p = DbgBin DbgOr pdbg' qdbg' p
 
     (pv, qv) = case v of
@@ -577,7 +586,7 @@ gatherIO (Syn (Free (Or p q next))) = gatherIO q <> gatherIO p
 stepOnce :: Monoid v => M.Map EventId EventValue -> NodeId -> Int -> Syn v a -> V v -> IO (Int, Syn v a, V v, [EventId], Bool)
 stepOnce m' nid eid p v = do
   sequence_ ios
-  pure (eid', p'', v', M.keys m, u)
+  pure (eid', p'', v', M.keys (m' <> m), u)
   where
     (eid', ios, p', _, v') = advance nid eid [] p v
     m = gather p'
@@ -596,8 +605,9 @@ stepAll = go []
     go es m nid eid p v = do
       (eid', p', v', eks, u) <- stepOnce m nid eid p v
 
-      -- traceIO ("*** " <> show p)
-      -- traceIO ("### " <> show p' <> ", EVENTS: " <> show (M.keys m) <> ", U: " <> show u)
+      traceIO ("> " <> show p <> ", Events: " <> intercalate "," (map (flip evColor "▲") eks) <> ", U: " <> show u)
+      traceIO ("< " <> show p')
+      traceIO ""
 
       case (p', u) of
         (Syn (Pure a), _) -> pure (Left (Just a), v', (eks, p):es)
@@ -615,7 +625,7 @@ exhaust nid p = do
 
 data Pool v = Pool (Event Internal (Syn v ()))
 
-pool :: Typeable v => Monoid v => (Pool v -> Syn v a) -> Syn v a
+pool :: Show a => Typeable v => Monoid v => (Pool v -> Syn v a) -> Syn v a
 pool f = local $ \e -> go e E $ mconcat
   [ liftOrr (Right . Left <$> await e)
   , liftOrr (Left <$> f (Pool e))
