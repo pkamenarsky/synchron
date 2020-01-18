@@ -5,7 +5,7 @@
 
 module Syn.Replica.DOM where
 
-import           Control.Concurrent       (MVar, newEmptyMVar, modifyMVar, putMVar, takeMVar)
+import           Control.Concurrent       (MVar, newMVar, newEmptyMVar, modifyMVar, putMVar, takeMVar)
 import           Control.Monad            (void)
 import           Control.Monad.Trans.Reader (runReaderT)
 
@@ -23,25 +23,46 @@ import qualified Replica.VDOM             as R
 import           Syn.View
 import qualified Syn
 
-data Context v a = Context Syn.NodeId (Syn.Event Syn.Internal [ViewPatch v]) (MVar (Maybe (Int, VSyn v a)))
+data Context v a = Context Syn.NodeId (Syn.Event Syn.Internal [ViewPatch v]) (MVar (Maybe (Int, VSyn v a, v)))
 
-push :: Context v b -> Syn.Event t a -> a -> IO (Maybe b)
-push (Context nid e v) (Syn.Event conc ei) a = modifyMVar v $ \v -> case v of
-  Just (eid, VSyn p) -> do
-    r <- Syn.stepAll (M.singleton (setNid ei') (Syn.EventValue (Syn.Event conc ei') a)) nid eid (runReaderT p ([0], e)) Syn.E
+newtype HTML = HTML { runHTML :: Context HTML () -> R.HTML }
+
+newContext :: Syn.NodeId -> VSyn HTML a -> IO (Context HTML a)
+newContext nid p = do
+  ve <- Syn.newEvent' (<>) nid
+  Context <$> pure nid <*> pure ve <*> newMVar (Just (0, p, HTML (const [])))
+
+patch :: ViewPatch R.HTML -> R.HTML -> R.HTML 
+patch ([], v) _ = v
+patch ((p:ps), v) h
+  | p >= length h = h <> take (p - length h) (repeat $ VText "") <> patch (ps, v) mempty
+  | otherwise = take p h <> patch (ps, v) [h !! p] <> drop (p + 1) h
+
+patch' :: ViewPatch HTML -> HTML -> HTML 
+patch' (path, v) (HTML h) = HTML $ \ctx -> patch (path, runHTML v ctx) (runHTML v ctx)
+
+push :: Context HTML b -> [Syn.EventValue] -> IO (Maybe b)
+push (Context nid e v) es = modifyMVar v $ \v -> case v of
+  Just (eid, p, v) -> do
+    (r, eid', _) <- Syn.stepAll' m nid eid (runView e p) Syn.E
 
     case r of
-      (Left a, v', _) -> pure (Nothing, a)
-      (Right (eid', p'), v', _) -> pure (Just (eid', liftSyn p'), Nothing)
+      Left (Just (Left a)) -> pure (Nothing, Just a)
+      Left (Just (Right (vp, next))) -> pure (Just (eid', next, foldr patch' v vp) , Nothing)
+      Left Nothing -> pure (Nothing, Nothing)
+      Right p' -> pure (Just (eid', left <$> liftSyn p', v), Nothing)
 
   _ -> pure (Nothing, Nothing)
   where
-    ei' = setNid ei
+    m = M.fromList
+      [ (setNid ei, (Syn.EventValue (Syn.Event conc (setNid ei)) a))
+      | Syn.EventValue (Syn.Event conc ei) a <- es
+      ]
+
+    left (Left a) = a
 
     setNid (Syn.External (_, eid)) = Syn.External (nid, eid)
     setNid (Syn.Internal eid) = Syn.Internal eid
-
-newtype HTML = HTML { runHTML :: Context HTML () -> R.HTML }
 
 el :: T.Text -> [Props a] -> [VSyn HTML a] -> VSyn HTML a
 el e attrs children = do
@@ -53,7 +74,7 @@ el e attrs children = do
     toAttr (Props k (PropBool v)) = pure ((k, \_ -> ABool v), [])
     toAttr (Props k (PropEvent extract)) = do
       e <- local
-      pure ((k, \ctx -> AEvent $ \de -> void $ push ctx e de), [extract <$> await e])
+      pure ((k, \ctx -> AEvent $ \de -> void $ push ctx [Syn.EventValue e de]), [extract <$> await e])
     toAttr (Props k (PropMap m)) = do
       m' <- mapM toAttr m
       pure ((k, \ctx -> AMap $ M.fromList $ fmap (second ($ ctx) . fst) m'), concatMap snd m')

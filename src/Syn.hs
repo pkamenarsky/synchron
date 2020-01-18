@@ -625,6 +625,21 @@ stepAll = go []
         (_, True) -> go ((eks ,p):es) M.empty nid eid' p' v'
         (_, False) -> pure (Right (eid', p'), v', (eks, p):es)
 
+stepAll' :: Monoid v => M.Map EventId EventValue -> NodeId -> Int -> Syn v a -> V v -> IO (Either (Maybe a) (Syn v a), Int, [([EventId], Syn v a)])
+stepAll' = go []
+  where
+    go es m nid eid p v = do
+      (eid', p', v', eks, u) <- stepOnce m nid eid p v
+
+      -- traceIO ("> " <> show p <> ", Events: " <> intercalate "," (map (flip evColor "▲") eks) <> ", U: " <> show u)
+      -- traceIO ("< " <> show p')
+      -- traceIO ""
+
+      case (p', u) of
+        (Syn (Pure a), _) -> pure (Left (Just a), eid', (eks, p):es)
+        (_, True) -> go ((eks ,p):es) M.empty nid eid' p' v'
+        (_, False) -> pure (Right p', eid', (eks, p):es)
+
 exhaust :: Typeable v => Monoid v => NodeId -> Syn v a -> IO (Maybe a, v)
 exhaust nid p = do
   r <- stepAll M.empty nid 0 p E
@@ -664,10 +679,10 @@ spawn (Pool e) p = do
 nextId :: IORef Int
 nextId = unsafePerformIO (newIORef 0)
 
-newEvent :: NodeId -> IO (Event External a)
+newEvent :: NodeId -> IO (Event t a)
 newEvent nid = Event const . External <$> atomicModifyIORef' nextId (\eid -> (eid + 1, (nid, eid)))
 
-newEvent' :: (a -> a -> a) -> NodeId -> IO (Event External a)
+newEvent' :: (a -> a -> a) -> NodeId -> IO (Event t a)
 newEvent' conc nid = Event conc . External <$> atomicModifyIORef' nextId (\eid -> (eid + 1, (nid, eid)))
 
 data Context v a = Context NodeId (MVar (Maybe (Int, Syn v a, V v)))

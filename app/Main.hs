@@ -24,6 +24,8 @@ import           Replica.DOM
 import           Replica.Props hiding (async)
 import           Replica.Events
 import           Syn
+import qualified Syn.View as VSyn
+import qualified Syn.Replica.DOM as VSyn
 
 import Network.HTTP.Types.Status
 import Network.WebSockets.Connection
@@ -143,12 +145,14 @@ main = pure ()
 
 -- Replica ---------------------------------------------------------------------
 
+runReplica :: Syn Replica.DOM.HTML () -> IO ()
 runReplica p = do
   let nid = NodeId 0
   ctx   <- newMVar (Just (0, p, E))
   block <- newMVar ()
   Warp.run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> do
     takeMVar block
+
     modifyMVar ctx $ \ctx' -> case ctx' of
       Just (eid, p, v) -> do
         r <- stepAll mempty nid eid p v
@@ -163,6 +167,25 @@ runReplica p = do
               , Just (html, (), \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))
               )
       Nothing -> pure (Nothing, Nothing)
+
+runReplica' :: VSyn.VSyn VSyn.HTML () -> IO ()
+runReplica' p = do
+  let nid = NodeId 0
+  ctx@(VSyn.Context _ _ ctxVar) <- VSyn.newContext nid p
+  block <- newMVar ()
+  Warp.run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> do
+    takeMVar block
+    VSyn.push ctx []
+    r <- readMVar ctxVar
+    case r of
+      Just (_, _, v) -> do
+        let html = VSyn.runHTML v ctx
+        pure $ Just
+          ( html
+          , ()
+          , \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re)
+          )
+      Nothing -> pure Nothing
 
 data ContainerProps = Click (Event Internal DOMEvent)
 data Container = Label T.Text | Number Int | Container [ContainerProps] [Container]
