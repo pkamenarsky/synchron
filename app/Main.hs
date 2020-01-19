@@ -353,3 +353,30 @@ synAddition = do
   VSyn.button [ onClick ] [ VSyn.text "Add" ]
   VSyn.div [ onClick ] [ VSyn.text ("Result :" <> T.pack (show (read (T.unpack a) + read (T.unpack b)))) ]
   synAddition
+
+--------------------------------------------------------------------------------
+
+-- synTodo' p = do
+--   t <- synInputOnEnter "What needs to be done?" ""
+--   spawn p (todo' p)
+--   todo (Todo t False)
+-- 
+-- todo t = do
+--   r <- div []
+--     [ ll <$> input [ type_ "checkbox", checked (done t), onChange ]
+--     , rl <$> ttext (task t)
+--     , rr <$> div [ onClick ] [ text "x" ]
+--     ]
+--   case r of
+--     Right (Left task') -> do
+--       todo (t { task = task' })
+--     Left (Left _) -> do
+--       todo (t { done = not (done t) })
+--     Right (Right _) -> pure ()
+-- 
+--   where
+--     ttext t = do
+--       div [ onDoubleClick ] [ text t ]
+--       inputOnEnter "" t
+-- 
+-- todos = pool todo'

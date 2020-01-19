@@ -15,11 +15,14 @@ import qualified Replica.VDOM             as R
 
 import qualified Syn as Syn
 
+-- REMOVE
+import Data.Typeable
+
 type Path = [Int]
 
 type ViewPatch v = (Path, v)
 
-newtype VSyn v a = VSyn (R.ReaderT (Path, Syn.Event Syn.Internal [ViewPatch v]) (Syn.Syn ()) a)
+newtype VSyn v a = VSyn { getVSyn :: R.ReaderT (Path, Syn.Event Syn.Internal [ViewPatch v]) (Syn.Syn ()) a }
   deriving (Functor, Applicative, Monad)
 
 liftSyn :: Syn.Syn () a -> VSyn v a
@@ -60,6 +63,12 @@ view v children = VSyn $ R.ReaderT $ \(path, e) -> do
       | (VSyn child, index) <- zip children [0..]
       ]
     ]
+
+-- pool :: Typeable v => Monoid v => (Syn.Pool () -> VSyn v a) -> VSyn v a
+-- pool f = VSyn $ R.ReaderT $ \(_, e) -> Syn.pool $ \p -> R.runReaderT (getVSyn $ f p) ([0], e)
+-- 
+-- spawn :: Syn.Pool () -> VSyn v () -> VSyn v ()
+-- spawn p v = VSyn $ R.ReaderT $ \(_, e) -> Syn.spawn p (R.runReaderT (getVSyn v) ([0], e))
 
 text_ :: T.Text -> VSyn R.HTML a
 text_ txt = view [R.VText txt] []
