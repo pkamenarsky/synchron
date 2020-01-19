@@ -73,10 +73,20 @@ evColor :: EventId -> String -> String
 evColor (Internal (_, c)) = color c
 evColor (External (_, c)) = color c
 
+evColor' :: EventId -> Int
+evColor' (Internal (_, c)) = c
+evColor' (External (_, c)) = c
+
 type W = Int
 type H = Int
 
-type Pictogram = String
+data Pictogram = PictAwait Int | PictEmit Int | PictDone | PictForever
+
+instance Show Pictogram where
+  show (PictAwait c) = color c "○"
+  show (PictEmit c) = color c "▲"
+  show PictDone = "◆"
+  show PictForever = "∞"
 
 data G = L W H Pictogram | B BinOp Bool W H G G | E W H deriving Show
 
@@ -93,7 +103,7 @@ gh (B _ _ _ h _ _) = h
 roww = 2
 
 drawG :: G -> [String]
-drawG (L w h c) = r (ss w) (h - 1) <> [c <> ss (w - 1)]
+drawG (L w h c) = r (ss w) (h - 1) <> [show c <> ss (w - 1)]
 drawG (E w h) = r (ss w) h
 drawG (B op draw w h p q) = (if draw then header' else []) <> ls -- zipWith (<>) (drawG p) (drawG q)
   where
@@ -146,14 +156,14 @@ toG p = go l
 testG (g:gs) = all ((== gw g) . gw) (g:gs)
 
 showG :: TSyn (W, Bool) -> (G, Maybe (TSyn (W, Bool)))
-showG (TDone (w, _)) = (L w 1 "◆", Nothing)
+showG (TDone (w, _)) = (L w 1 PictDone, Nothing)
 -- showG (TDone (w, _)) = (L w 1 "D", Nothing)
 showG (TBlocked (w, _)) = (E w 1, Nothing)
-showG (TForever (w, _)) = (L w 1 "∞", Nothing)
+showG (TForever (w, _)) = (L w 1 PictForever, Nothing)
 -- showG (TAwait (w, _) e next) = (L w 1 ("A"), Just next)
-showG (TAwait (w, _) e next) = (L w 1 ("○"), Just next)
+showG (TAwait (w, _) e next) = (L w 1 (PictAwait (evColor' e)), Just next)
 -- showG (TEmit (w, _) e next) = (L w 1 ("E"), Just next)
-showG (TEmit (w, _) e next) = (L w 1 ("▲"), Just next)
+showG (TEmit (w, _) e next) = (L w 1 (PictEmit (evColor' e)), Just next)
 showG (TJoin next) = showG next
 showG (TBin (w, draw) op p q d) = case (pg, qg) of
   (E _ _, E _ _) -> showG d
@@ -425,29 +435,34 @@ aR rx ry xrot largeFlag sweepFlag x y = T.concat
   [ "a ", toText rx, ",", toText ry, " ", toText xrot, " ", T.pack (show largeFlag)
   , " ", T.pack (show sweepFlag), " ", toText x, " ", toText y, " "]
 
-trail' :: String -> Text -> Double -> Double -> Double -> Double -> Double -> Element
+palette = [ "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe", "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000", "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080", "#ffffff", "#000000" ]
+
+paletteColor x = palette !! (x `mod` length palette)
+
+trail' :: Pictogram -> Text -> Double -> Double -> Double -> Double -> Double -> Element
 trail' c color x y width height r = mconcat
   [ path_
       [ D_ <<- (mA x y <> vR height <> aR (width / 2) (width /2) 0 1 0 width 0 <> vR (-height) <> z)
-      , Fill_ <<- color
+      , Fill_ <<- "#000"
       ]
   , case c of
-      "○" -> circle_
+      PictAwait c -> circle_
         [ Cx_ <<- t (x + (width / 2))
         , Cy_ <<- t (y + height)
-        , R_ <<- t (r / 1.2)
-        , Stroke_ <<- "#fff"
-        , Stroke_width_ <<- "2px"
-        , Fill_ <<- "transparent"
+        , R_ <<- t (r / 1.1)
+        -- , Stroke_ <<- paletteColor c
+        -- , Stroke_width_ <<- "2px"
+        -- , Fill_ <<- "transparent"
+        , Fill_ <<- paletteColor c
         , Class_ <<- "circle"
         ]
-      "◆" -> path_
+      PictDone -> path_
         [ D_ <<- (mA (x + width / 2) (y + height - r) <> lR r r <> lR (-r) r <> lR (-r) (-r) <> z)
         , Fill_ <<- "#fff"
         ]
-      "▲" -> path_
+      PictEmit c -> path_
         [ D_ <<- (mA (x + width / 2 - r) (y + height - r) <> lR r (r * 1.8) <> lR r (-r * 1.8) <> z)
-        , Fill_ <<- "#fff"
+        , Fill_ <<- paletteColor c
         ]
       otherwise -> path_ []
   ]
@@ -496,7 +511,7 @@ toy y = gridy + fromIntegral y * gridh
 tow w = fromIntegral w * gridw
 toh h = fromIntegral h * gridh
 
-gridTrail :: String -> Int -> Int -> Int -> Element
+gridTrail :: Pictogram -> Int -> Int -> Int -> Element
 gridTrail t x y h = trail' t "#333" (tox x) (toy y) (tow 1) (toh h) (gridw / 4)
 
 svgG :: Int -> Int -> G -> Element
@@ -510,7 +525,7 @@ svgG x y (B op draw w h p q) = mconcat
         -- [ D_ <<- (mA (tox x) (toy (y + 1) - (gridh / 3)) <> hR (tow (w - 1)))
         [ D_ <<- (mA (tox x) (toy (y + 1) - (gridh / 3) - 2) <> lR tm 0 <> lR tx (-ty) <> lR tx ty <> lR tm 0) 
         , Stroke_width_ <<- "3px"
-        , Stroke_ <<- "#333"
+        , Stroke_ <<- "#000"
         , Fill_ <<- "transparent"
         ]
       else mempty
