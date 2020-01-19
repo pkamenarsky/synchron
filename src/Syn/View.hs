@@ -25,6 +25,14 @@ type ViewPatch v = (Path, v)
 newtype VSyn v a = VSyn { getVSyn :: R.ReaderT (Path, Syn.Event Syn.Internal [ViewPatch v]) (Syn.Syn ()) a }
   deriving (Functor, Applicative, Monad)
 
+instance Alternative (VSyn v) where
+  empty = forever
+  VSyn a <|> VSyn b = VSyn $ R.ReaderT $ \(path, e) -> R.runReaderT a (path, e) <|> R.runReaderT b (siblingPath path, e)
+
+-- TODO: this is atrocious
+siblingPath :: Path -> Path
+siblingPath p = init p <> [last p + 1]
+
 liftSyn :: Syn.Syn () a -> VSyn v a
 liftSyn  = VSyn . lift
 
@@ -64,7 +72,7 @@ view v children = VSyn $ R.ReaderT $ \(path, e) -> do
       ]
     ]
 
--- pool :: Typeable v => Monoid v => (Syn.Pool () -> VSyn v a) -> VSyn v a
+-- pool :: (Syn.Pool () -> VSyn v a) -> VSyn v a
 -- pool f = VSyn $ R.ReaderT $ \(_, e) -> Syn.pool $ \p -> R.runReaderT (getVSyn $ f p) ([0], e)
 -- 
 -- spawn :: Syn.Pool () -> VSyn v () -> VSyn v ()
