@@ -151,9 +151,9 @@ showG (TDone (w, _)) = (L w 1 "◆", Nothing)
 showG (TBlocked (w, _)) = (E w 1, Nothing)
 showG (TForever (w, _)) = (L w 1 "∞", Nothing)
 -- showG (TAwait (w, _) e next) = (L w 1 ("A"), Just next)
-showG (TAwait (w, _) e next) = (L w 1 (evColor e "○"), Just next)
+showG (TAwait (w, _) e next) = (L w 1 ("○"), Just next)
 -- showG (TEmit (w, _) e next) = (L w 1 ("E"), Just next)
-showG (TEmit (w, _) e next) = (L w 1 (evColor e "▲"), Just next)
+showG (TEmit (w, _) e next) = (L w 1 ("▲"), Just next)
 showG (TJoin next) = showG next
 showG (TBin (w, draw) op p q d) = case (pg, qg) of
   (E _ _, E _ _) -> showG d
@@ -425,21 +425,31 @@ aR rx ry xrot largeFlag sweepFlag x y = T.concat
   [ "a ", toText rx, ",", toText ry, " ", toText xrot, " ", T.pack (show largeFlag)
   , " ", T.pack (show sweepFlag), " ", toText x, " ", toText y, " "]
 
-trail' :: Text -> Double -> Double -> Double -> Double -> Double -> Element
-trail' color x y width height r = mconcat
+trail' :: String -> Text -> Double -> Double -> Double -> Double -> Double -> Element
+trail' c color x y width height r = mconcat
   [ path_
       [ D_ <<- (mA x y <> vR height <> aR (width / 2) (width /2) 0 1 0 width 0 <> vR (-height) <> z)
       , Fill_ <<- color
       ]
-  , mconcat
-      [ circle_
-          [ Cx_ <<- t (x + (width / 2))
-          , Cy_ <<- t (y + height)
-          , R_ <<- t r
-          , Fill_ <<- "#ddd"
-          , Class_ <<- "circle"
-          ]
-      ]
+  , case c of
+      "○" -> circle_
+        [ Cx_ <<- t (x + (width / 2))
+        , Cy_ <<- t (y + height)
+        , R_ <<- t (r / 1.2)
+        , Stroke_ <<- "#fff"
+        , Stroke_width_ <<- "2px"
+        , Fill_ <<- "transparent"
+        , Class_ <<- "circle"
+        ]
+      "◆" -> path_
+        [ D_ <<- (mA (x + width / 2) (y + height - r) <> lR r r <> lR (-r) r <> lR (-r) (-r) <> z)
+        , Fill_ <<- "#fff"
+        ]
+      "▲" -> path_
+        [ D_ <<- (mA (x + width / 2 - r) (y + height - r) <> lR r (r * 1.8) <> lR r (-r * 1.8) <> z)
+        , Fill_ <<- "#fff"
+        ]
+      otherwise -> path_ []
   ]
   where
     t = T.pack . show
@@ -486,13 +496,11 @@ toy y = gridy + fromIntegral y * gridh
 tow w = fromIntegral w * gridw
 toh h = fromIntegral h * gridh
 
-gridTrail :: Int -> Int -> Int -> Element
-gridTrail x y h = trail' "#333" (tox x) (toy y) (tow 1) (toh h) (gridw / 4)
-
-gsvg = gridTrail 0 0 5
+gridTrail :: String -> Int -> Int -> Int -> Element
+gridTrail t x y h = trail' t "#333" (tox x) (toy y) (tow 1) (toh h) (gridw / 4)
 
 svgG :: Int -> Int -> G -> Element
-svgG x y (L _ h c) = gridTrail x y h
+svgG x y (L _ h c) = gridTrail c x y h
 svgG x y (E _ _) = mempty
 svgG x y (B op draw w h p q) = mconcat
   [ svgG x (y + h - gh p) p
@@ -516,12 +524,14 @@ svgG x y (B op draw w h p q) = mconcat
 
     tm = tw / 2 - tx
 
+svgGs :: H -> [G] -> Element
 svgGs _ [] = mempty
 svgGs h (g:gs) = svgGs (h + h') gs <> svgG 0 h g
   where
     h' = gh g
 
-makeSvg e = writeFile "out.svg" (generateSVG "" e)
+makeSvg :: Monoid v => Syn v a -> IO ()
+makeSvg p = writeFile "out.svg" (generateSVG "" (svgGs 0 $ toG p))
 
 -- main :: IO ()
 -- main = do
