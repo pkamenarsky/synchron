@@ -64,7 +64,7 @@ push ctx@(Context nid e v) es = do
         Left (Just (Right (vp, next))) -> do
           let vp' = fmap (second (flip runHTML ctx)) (vp)
 
-          -- traceIO $ show $ "VP: " <> A.encode vp'
+          traceIO $ show $ "VP: " <> A.encode vp'
           -- traceIO $ show $ "V BEFORE: "<> A.encode v
   
           pure (Just (eid', next, foldr (\(path, v) h -> patch (reverse path, v) h) v vp'), Nothing)

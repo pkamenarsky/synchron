@@ -356,27 +356,27 @@ synAddition = do
 
 --------------------------------------------------------------------------------
 
--- synTodo' p = do
---   t <- synInputOnEnter "What needs to be done?" ""
---   VSyn.spawn p (synTodo' p)
---   synTodo (Todo t False)
--- 
--- synTodo t = do
---   r <- VSyn.div []
---     [ ll <$> VSyn.input [ type_ "checkbox", checked (done t), onChange ]
---     , rl <$> ttext (task t)
---     , rr <$> VSyn.div [ onClick ] [ VSyn.text "x" ]
---     ]
---   case r of
---     Right (Left task') -> do
---       synTodo (t { task = task' })
---     Left (Left _) -> do
---       synTodo (t { done = not (done t) })
---     Right (Right _) -> pure ()
--- 
---   where
---     ttext t = do
---       VSyn.div [ onDoubleClick ] [ VSyn.text t ]
---       synInputOnEnter "" t
--- 
--- synTodos = VSyn.pool synTodo'
+synTodo' p = do
+  t <- synInputOnEnter "What needs to be done?" ""
+  VSyn.spawn p (synTodo' p)
+  synTodo (Todo t False)
+
+synTodo t = do
+  r <- VSyn.div []
+    [ ll <$> VSyn.input [ type_ "checkbox", checked (done t), onChange ]
+    , rl <$> ttext (task t)
+    , rr <$> VSyn.div [ onClick ] [ VSyn.text "x" ]
+    ]
+  case r of
+    Right (Left task') -> do
+      synTodo (t { task = task' })
+    Left (Left _) -> do
+      synTodo (t { done = not (done t) })
+    Right (Right _) -> pure ()
+
+  where
+    ttext t = do
+      VSyn.div [ onDoubleClick ] [ VSyn.text t ]
+      synInputOnEnter "" t
+
+synTodos = VSyn.pool synTodo'

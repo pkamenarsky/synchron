@@ -1,5 +1,7 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings           #-}
+{-# LANGUAGE TupleSections               #-}
 
 module Syn.View where
 
@@ -8,6 +10,7 @@ import Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.Trans.Reader as R
 
 import Data.Bifunctor (second)
+import Data.Maybe (fromJust)
 
 import qualified Data.Text                as T
 
@@ -27,7 +30,7 @@ newtype VSyn v a = VSyn { getVSyn :: R.ReaderT (Path, Syn.Event Syn.Internal [Vi
 
 instance Alternative (VSyn v) where
   empty = forever
-  VSyn a <|> VSyn b = VSyn $ R.ReaderT $ \(path, e) -> R.runReaderT a (path, e) <|> R.runReaderT b (siblingPath path, e)
+  VSyn a <|> VSyn b = VSyn $ R.ReaderT $ \(path, e) -> R.runReaderT a (siblingPath path, e) <|> R.runReaderT b (siblingPath (siblingPath path), e)
 
 -- TODO: this is atrocious
 siblingPath :: Path -> Path
@@ -63,6 +66,35 @@ emit e a = liftSyn (Syn.emit e a)
 local :: VSyn v (Syn.Event Syn.Internal a)
 local = liftSyn $ Syn.local pure
 
+orr' :: VSyn v a -> VSyn v a -> VSyn v (a, VSyn v a)
+orr' (VSyn a) (VSyn b) = VSyn $ R.ReaderT $ \(path, e) -> do
+  (a, (ks, _)) <- Syn.orr' (R.runReaderT a (siblingPath path, e)) (R.runReaderT b (siblingPath (siblingPath path), e))
+  pure (a, liftSyn ks)
+
+orr :: [VSyn v a] -> VSyn v a
+orr [a] = a
+orr [a, b] = fst <$> orr' a b
+orr (a:as) = orr [a, orr as]
+
+data Orr v a = Orr (VSyn v (a, Orr v a)) | D
+
+runOrr :: Orr v a -> Maybe (VSyn v (a, Orr v a))
+runOrr (Orr o) = Just o
+runOrr D = Nothing
+
+instance Semigroup (Orr v a) where
+  D <> q = q
+  p <> D = p
+  Orr p <> Orr q = Orr $ do
+    ((a, m), n) <- orr' p q
+    pure (a, m <> Orr n)
+
+instance Monoid (Orr v a) where
+  mempty = D
+
+liftOrr :: VSyn v a -> Orr v a
+liftOrr p = Orr ((,D) <$> p)
+
 view :: v -> [VSyn v a] -> VSyn v a
 view v children = VSyn $ R.ReaderT $ \(path, e) -> do
   Syn.orr $ mconcat
@@ -72,11 +104,31 @@ view v children = VSyn $ R.ReaderT $ \(path, e) -> do
       ]
     ]
 
--- pool :: (Syn.Pool () -> VSyn v a) -> VSyn v a
--- pool f = VSyn $ R.ReaderT $ \(_, e) -> Syn.pool $ \p -> R.runReaderT (getVSyn $ f p) ([0], e)
--- 
--- spawn :: Syn.Pool () -> VSyn v () -> VSyn v ()
--- spawn p v = VSyn $ R.ReaderT $ \(_, e) -> Syn.spawn p (R.runReaderT (getVSyn v) ([0], e))
+data Pool v = Pool (Syn.Event Syn.Internal (VSyn v ()))
+
+pool :: (Pool v -> VSyn v a) -> VSyn v a
+pool f = do
+  e <- local
+  go e $ mconcat
+    [ liftOrr (Right . Left <$> await e)
+    , liftOrr (Left <$> f (Pool e))
+    ]
+  where
+    go e k = do
+      (r, k') <- orr [ fromJust (runOrr k) ]
+
+      case r of
+        Left a -> pure a
+        Right (Left p)  -> go e $ mconcat
+          [ liftOrr (Right . Left <$> await e)
+          , liftOrr (fmap (Right . Right) p)
+          , k'
+          ]
+        Right (Right _) -> go e k'
+
+spawn :: Pool v -> VSyn v () -> VSyn v ()
+spawn (Pool e) p = do
+  emit e p
 
 text_ :: T.Text -> VSyn R.HTML a
 text_ txt = view [R.VText txt] []
