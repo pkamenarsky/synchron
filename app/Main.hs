@@ -173,9 +173,9 @@ runReplica' p = do
   let nid = NodeId 0
   ctx@(VSyn.Context _ _ ctxVar) <- VSyn.newContext nid p
   block <- newMVar ()
+  VSyn.push ctx []
   Warp.run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> do
     takeMVar block
-    VSyn.push ctx []
     r <- readMVar ctxVar
     case r of
       Just (_, _, v) -> do
@@ -183,7 +183,7 @@ runReplica' p = do
         pure $ Just
           ( html
           , ()
-          , \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re)
+          , \re -> fmap (print re >> putMVar block() >>) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re)
           )
       Nothing -> pure Nothing
 
@@ -330,3 +330,9 @@ todo t = do
       inputOnEnter "" t
 
 todos = pool todo'
+
+--------------------------------------------------------------------------------
+
+synCounter x = do
+  VSyn.div [ onClick ] [ VSyn.text (T.pack $ show x) ]
+  synCounter (x + 1)

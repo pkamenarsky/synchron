@@ -11,17 +11,21 @@ import           Control.Monad.Trans.Reader (runReaderT)
 
 import           Replica.Props            (Props(Props), Prop(PropText, PropBool, PropEvent, PropMap), key)
 
+import qualified Data.Aeson               as A
 import           Data.Bifunctor           (second)
 import           Data.Monoid              ((<>))
 import qualified Data.Text                as T
 
 import qualified Data.Map                 as M
 
-import           Replica.VDOM             (Attr(AText, ABool, AEvent, AMap), DOMEvent, VDOM(VNode, VText))
+import           Replica.VDOM             (Attr(AText, ABool, AEvent, AMap), DOMEvent, VDOM(..))
 import qualified Replica.VDOM             as R
 
 import           Syn.View
 import qualified Syn
+
+import Unsafe.Coerce (unsafeCoerce)
+import Debug.Trace
 
 data Context v a = Context Syn.NodeId (Syn.Event Syn.Internal [ViewPatch v]) (MVar (Maybe (Int, VSyn v a, v)))
 
@@ -33,26 +37,39 @@ newContext nid p = do
   Context <$> pure nid <*> pure ve <*> newMVar (Just (0, p, HTML (const [])))
 
 patch :: ViewPatch R.HTML -> R.HTML -> R.HTML 
+patch a b
+  | trace ("A" <> show (A.encode a) <> "===" <> show (A.encode b)) False = undefined
 patch ([], v) _ = v
 patch ((p:ps), v) h
   | p >= length h = h <> take (p - length h) (repeat $ VText "") <> patch (ps, v) mempty
-  | otherwise = take p h <> patch (ps, v) [h !! p] <> drop (p + 1) h
+  | otherwise = take p h <> [patchChildren ps v (h !! p)] <> drop (p + 1) h
+  where
+    patchChildren ps v n@(VNode e attrs children)
+      -- = trace ("TRACE: " <> show (A.encode n)) $ VNode e attrs (patch (ps, v) children)
+      = VNode e attrs (patch (ps, v) children)
+    patchChildren _ _ n = error (show $ A.encode n)
 
 patch' :: ViewPatch HTML -> HTML -> HTML 
-patch' (path, v) (HTML h) = HTML $ \ctx -> patch (path, runHTML v ctx) (runHTML v ctx)
+patch' (path, v) (HTML h) = HTML $ \ctx -> let r = patch (path, runHTML v ctx) (h ctx) in trace ("R: " <> show (A.encode r)) r
 
 push :: Context HTML b -> [Syn.EventValue] -> IO (Maybe b)
-push (Context nid e v) es = modifyMVar v $ \v -> case v of
-  Just (eid, p, v) -> do
-    (r, eid', _) <- Syn.stepAll' m nid eid (runView e p) Syn.E
-
-    case r of
-      Left (Just (Left a)) -> pure (Nothing, Just a)
-      Left (Just (Right (vp, next))) -> pure (Just (eid', next, foldr patch' v vp) , Nothing)
-      Left Nothing -> pure (Nothing, Nothing)
-      Right p' -> pure (Just (eid', left <$> liftSyn p', v), Nothing)
-
-  _ -> pure (Nothing, Nothing)
+push ctx@(Context nid e v) es = do
+  traceIO "PUUSSHS"
+  modifyMVar v $ \v -> case v of
+    Just (eid, p, v) -> do
+      (r, eid', _) <- Syn.stepAll' m nid eid (runView e p) Syn.E
+  
+      case r of
+        Left (Just (Left a)) -> pure (Nothing, Just a)
+        Left (Just (Right (vp, next))) -> do
+          traceIO $ show $ "VP: " <> A.encode (fmap (second (flip runHTML $ unsafeCoerce ctx)) (vp))
+          -- print $ A.encode (runHTML (foldr patch' v (vp)) $ unsafeCoerce ctx)
+  
+          pure (Just (eid', next, foldr patch' v (vp)), Nothing)
+        Left Nothing -> pure (Nothing, Nothing)
+        Right p' -> pure (Just (eid', left <$> liftSyn p', v), Nothing)
+  
+    _ -> pure (Nothing, Nothing)
   where
     m = M.fromList
       [ (setNid ei, (Syn.EventValue (Syn.Event conc (setNid ei)) a))

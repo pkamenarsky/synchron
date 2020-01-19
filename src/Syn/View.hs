@@ -60,8 +60,8 @@ view v children = VSyn $ R.ReaderT $ \(path, e) -> do
       ]
     ]
 
-text :: T.Text -> VSyn R.HTML a
-text txt = view [R.VText txt] []
+text_ :: T.Text -> VSyn R.HTML a
+text_ txt = view [R.VText txt] []
 
 div_ :: [VSyn R.HTML a] -> VSyn R.HTML a
 div_ children = view [R.VNode "div" mempty []] children
@@ -91,9 +91,9 @@ replayView v es = Syn.local $ \dummy -> Syn.local' (<>) $ \e -> go e [] v (es <>
     left (Left a) = a
 
 v e = do
-  div_ [ div_ [ text "bla", v2 ] ]
-  div_ [ text "Done", await e ]
-  div_ [ text "Done" ]
+  div_ [ div_ [ text_ "bla", v2 ] ]
+  div_ [ text_ "Done", await e ]
+  div_ [ text_ "Done" ]
   where
     v2 = do
       div_ [ await e ]
