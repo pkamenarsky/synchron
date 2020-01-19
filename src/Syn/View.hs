@@ -3,6 +3,7 @@
 
 module Syn.View where
 
+import Control.Applicative
 import Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.Trans.Reader as R
 

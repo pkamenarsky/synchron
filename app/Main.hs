@@ -179,11 +179,10 @@ runReplica' p = do
     r <- readMVar ctxVar
     case r of
       Just (_, _, v) -> do
-        let html = VSyn.runHTML v ctx
         pure $ Just
-          ( html
+          ( v
           , ()
-          , \re -> fmap (print re >> putMVar block() >>) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re)
+          , \re -> fmap (putMVar block() >>) $ fireEvent v (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re)
           )
       Nothing -> pure Nothing
 
@@ -336,3 +335,21 @@ todos = pool todo'
 synCounter x = do
   VSyn.div [ onClick ] [ VSyn.text (T.pack $ show x) ]
   synCounter (x + 1)
+
+synCounters = VSyn.div [] [ synCounter 0, synCounter 1, synCounter 2 ]
+
+synInputOnEnter p v = do
+  e <- VSyn.input [ autofocus True, placeholder p, value v, Left <$> onInput, Right <$> onKeyDown ]
+  case e of
+    Left e  -> synInputOnEnter p (targetValue $ target e)
+    Right e -> if kbdKey e == "Enter"
+      then pure v
+      else synInputOnEnter p v
+
+synAddition = do
+  a <- synInputOnEnter "X" ""
+  VSyn.button [ onClick ] [ VSyn.text "Next" ]
+  b <- synInputOnEnter "Y" ""
+  VSyn.button [ onClick ] [ VSyn.text "Add" ]
+  VSyn.div [ onClick ] [ VSyn.text ("Result :" <> T.pack (show (read (T.unpack a) + read (T.unpack b)))) ]
+  synAddition

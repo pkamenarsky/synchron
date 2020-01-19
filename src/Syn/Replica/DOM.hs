@@ -27,34 +27,34 @@ import qualified Syn
 import Unsafe.Coerce (unsafeCoerce)
 import Debug.Trace
 
-data Context v a = Context Syn.NodeId (Syn.Event Syn.Internal [ViewPatch v]) (MVar (Maybe (Int, VSyn v a, v)))
+data Context a = Context
+  Syn.NodeId
+  (Syn.Event Syn.Internal [ViewPatch HTML])
+  (MVar (Maybe (Int, VSyn HTML a, R.HTML)))
 
-newtype HTML = HTML { runHTML :: Context HTML () -> R.HTML }
+newtype HTML = HTML { runHTML :: Context () -> R.HTML }
 
-newContext :: Syn.NodeId -> VSyn HTML a -> IO (Context HTML a)
+newContext :: Syn.NodeId -> VSyn HTML a -> IO (Context a)
 newContext nid p = do
   ve <- Syn.newEvent' (<>) nid
-  Context <$> pure nid <*> pure ve <*> newMVar (Just (0, p, HTML (const [])))
+  Context <$> pure nid <*> pure ve <*> newMVar (Just (0, p, []))
 
 patch :: ViewPatch R.HTML -> R.HTML -> R.HTML 
-patch a b
-  | trace ("A" <> show (A.encode a) <> "===" <> show (A.encode b)) False = undefined
-patch ([], v) _ = v
-patch ((p:ps), v) h
-  | p >= length h = h <> take (p - length h) (repeat $ VText "") <> patch (ps, v) mempty
-  | otherwise = take p h <> [patchChildren ps v (h !! p)] <> drop (p + 1) h
+-- patch a b
+--   | trace ("A" <> show (A.encode a) <> "===" <> show (A.encode b)) False = undefined
+patch ([], v) _ = error "patch"
+patch ([p], v) h
+  | p >= length h = h <> take (p - length h) (repeat $ VText "") <> v
+  | otherwise = take p h <> v <> drop (p + 1) h
+patch ((p:ps), v) h = take p h <> [patchChildren ps v (h !! p)] <> drop (p + 1) h
   where
     patchChildren ps v n@(VNode e attrs children)
       -- = trace ("TRACE: " <> show (A.encode n)) $ VNode e attrs (patch (ps, v) children)
       = VNode e attrs (patch (ps, v) children)
     patchChildren _ _ n = error (show $ A.encode n)
 
-patch' :: ViewPatch HTML -> HTML -> HTML 
-patch' (path, v) (HTML h) = HTML $ \ctx -> let r = patch (path, runHTML v ctx) (h ctx) in trace ("R: " <> show (A.encode r)) r
-
-push :: Context HTML b -> [Syn.EventValue] -> IO (Maybe b)
+push :: Context () -> [Syn.EventValue] -> IO (Maybe ())
 push ctx@(Context nid e v) es = do
-  traceIO "PUUSSHS"
   modifyMVar v $ \v -> case v of
     Just (eid, p, v) -> do
       (r, eid', _) <- Syn.stepAll' m nid eid (runView e p) Syn.E
@@ -62,31 +62,30 @@ push ctx@(Context nid e v) es = do
       case r of
         Left (Just (Left a)) -> pure (Nothing, Just a)
         Left (Just (Right (vp, next))) -> do
-          traceIO $ show $ "VP: " <> A.encode (fmap (second (flip runHTML $ unsafeCoerce ctx)) (vp))
-          -- print $ A.encode (runHTML (foldr patch' v (vp)) $ unsafeCoerce ctx)
+          let vp' = fmap (second (flip runHTML ctx)) (vp)
+
+          -- traceIO $ show $ "VP: " <> A.encode vp'
+          -- traceIO $ show $ "V BEFORE: "<> A.encode v
   
-          pure (Just (eid', next, foldr patch' v (vp)), Nothing)
+          pure (Just (eid', next, foldr (\(path, v) h -> patch (reverse path, v) h) v vp'), Nothing)
         Left Nothing -> pure (Nothing, Nothing)
         Right p' -> pure (Just (eid', left <$> liftSyn p', v), Nothing)
   
     _ -> pure (Nothing, Nothing)
   where
     m = M.fromList
-      [ (setNid ei, (Syn.EventValue (Syn.Event conc (setNid ei)) a))
+      [ (ei, (Syn.EventValue (Syn.Event conc ei) a))
       | Syn.EventValue (Syn.Event conc ei) a <- es
       ]
 
     left (Left a) = a
-
-    setNid (Syn.External (_, eid)) = Syn.External (nid, eid)
-    setNid (Syn.Internal eid) = Syn.Internal eid
 
 el :: T.Text -> [Props a] -> [VSyn HTML a] -> VSyn HTML a
 el e attrs children = do
   attrs' <- traverse toAttr attrs
   view (HTML $ \ctx -> [VNode e (M.fromList $ fmap (second ($ ctx) . fst) attrs') []]) (children <> concatMap snd attrs')
   where
-    toAttr :: Props a -> VSyn HTML ((T.Text, Context HTML () -> Attr), [VSyn HTML a])
+    toAttr :: Props a -> VSyn HTML ((T.Text, Context () -> Attr), [VSyn HTML a])
     toAttr (Props k (PropText v)) = pure ((k, \_ -> AText v), [])
     toAttr (Props k (PropBool v)) = pure ((k, \_ -> ABool v), [])
     toAttr (Props k (PropEvent extract)) = do
