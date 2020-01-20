@@ -594,10 +594,10 @@ gatherIO (Syn (Free (Or p q next))) = M.unionWith concatEventValues <$> gatherIO
 
 --------------------------------------------------------------------------------
 
-stepOnce :: Monoid v => M.Map EventId EventValue -> NodeId -> Int -> Syn v a -> V v -> IO (Int, Syn v a, V v, [EventId], Bool)
+stepOnce :: Monoid v => M.Map EventId EventValue -> NodeId -> Int -> Syn v a -> V v -> IO (Int, Syn v a, V v, M.Map EventId EventValue, Bool)
 stepOnce m' nid eid p v = do
   sequence_ ios
-  pure (eid', p'', v', M.keys (m' <> m), u)
+  pure (eid', p'', v', m' <> m, u)
   where
     (eid', ios, p', _, v') = advance nid eid [] p v
     m = gather p'
@@ -610,35 +610,35 @@ stepOnce' m nid eid p v = (eid', p'', dbg, v', m', ios, u)
     (eid', ios, p'', dbg, v') = advance nid eid [] p' v
     m' = gather p''
 
-stepAll :: Monoid v => M.Map EventId EventValue -> NodeId -> Int -> Syn v a -> V v -> IO (Either (Maybe a) (Int, Syn v a), V v, [([EventId], Syn v a)])
-stepAll = go []
+stepAll :: Monoid v => M.Map EventId EventValue -> NodeId -> Int -> Syn v a -> V v -> IO (Either (Maybe a) (Int, Syn v a), V v, M.Map EventId EventValue)
+stepAll = go mempty
   where
-    go es m nid eid p v = do
-      (eid', p', v', eks, u) <- stepOnce m nid eid p v
+    go om m nid eid p v = do
+      (eid', p', v', m', u) <- stepOnce m nid eid p v
 
-      traceIO ("> " <> show p <> ", Events: " <> intercalate "," (map (flip evColor "▲") eks) <> ", U: " <> show u)
+      traceIO ("> " <> show p <> ", Events: " <> intercalate "," (map (flip evColor "▲") (M.keys m')) <> ", U: " <> show u)
       traceIO ("< " <> show p')
       traceIO ""
 
       case (p', u) of
-        (Syn (Pure a), _) -> pure (Left (Just a), v', (eks, p):es)
-        (_, True) -> go ((eks ,p):es) M.empty nid eid' p' v'
-        (_, False) -> pure (Right (eid', p'), v', (eks, p):es)
+        (Syn (Pure a), _) -> pure (Left (Just a), v', m' <> om)
+        (_, True) -> go (m' <> om) M.empty nid eid' p' v'
+        (_, False) -> pure (Right (eid', p'), v', m' <> om)
 
-stepAll' :: Monoid v => M.Map EventId EventValue -> NodeId -> Int -> Syn v a -> V v -> IO (Either (Maybe a) (Syn v a), Int, [([EventId], Syn v a)])
-stepAll' = go []
-  where
-    go es m nid eid p v = do
-      (eid', p', v', eks, u) <- stepOnce m nid eid p v
-
-      traceIO ("> " <> show p <> ", Events: " <> intercalate "," (map (flip evColor "▲") eks) <> ", U: " <> show u)
-      traceIO ("< " <> show p')
-      traceIO ""
-
-      case (p', u) of
-        (Syn (Pure a), _) -> pure (Left (Just a), eid', (eks, p):es)
-        (_, True) -> go ((eks ,p):es) M.empty nid eid' p' v'
-        (_, False) -> pure (Right p', eid', (eks, p):es)
+-- stepAll' :: Monoid v => M.Map EventId EventValue -> NodeId -> Int -> Syn v a -> V v -> IO (Either (Maybe a) (Syn v a), Int, [([EventId], Syn v a)])
+-- stepAll' = go []
+--   where
+--     go es m nid eid p v = do
+--       (eid', p', v', eks, u) <- stepOnce m nid eid p v
+-- 
+--       traceIO ("> " <> show p <> ", Events: " <> intercalate "," (map (flip evColor "▲") eks) <> ", U: " <> show u)
+--       traceIO ("< " <> show p')
+--       traceIO ""
+-- 
+--       case (p', u) of
+--         (Syn (Pure a), _) -> pure (Left (Just a), eid', (eks, p):es)
+--         (_, True) -> go ((eks ,p):es) M.empty nid eid' p' v'
+--         (_, False) -> pure (Right p', eid', (eks, p):es)
 
 exhaust :: Typeable v => Monoid v => NodeId -> Syn v a -> IO (Maybe a, v)
 exhaust nid p = do

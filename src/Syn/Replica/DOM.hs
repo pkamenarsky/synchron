@@ -63,10 +63,19 @@ patch ([p], v) h
 --     patchChildren _ _ n = error (show $ A.encode n)
 
 push :: Context () -> [Syn.EventValue] -> IO (Maybe ())
-push ctx@(Context nid e v) es = do
+push ctx@(Context nid e@(Syn.Event _ veid) v) es = do
   modifyMVar v $ \v -> case v of
-    Just (eid, p, v) -> do
-      -- (r, eid', _) <- Syn.stepAll' m nid eid (runView e p) Syn.E
+    Just (eid, VSyn p, v) -> do
+      (r, eid', m') <- Syn.stepAll m nid eid (runReaderT p ([0], e)) Syn.E
+      case r of
+        Left a -> pure (Nothing, Nothing)
+        Right (eid'', p') -> do
+          case M.lookup veid m' of
+            Just (Syn.EventValue _ vp) -> do
+              let vp' = fmap (second (flip runHTML ctx)) (unsafeCoerce vp :: [ViewPatch HTML])
+              pure (Just (eid'', liftSyn p', foldr (\(path, v) h -> patch (path, v) h) v vp'), Nothing)
+            Nothing -> 
+              pure (Just (eid'', liftSyn p', v), Nothing)
   
       -- case r of
       --   Left (Just (Left a)) -> pure (Nothing, Just a)
@@ -79,12 +88,13 @@ push ctx@(Context nid e v) es = do
       --     pure (Just (eid', next, foldr (\(path, v) h -> patch (path, v) h) v vp'), Nothing)
       --   Left Nothing -> pure (Nothing, Nothing)
       --   Right p' -> pure (Just (eid', left <$> liftSyn p', v), Nothing)
-      r <- go m eid p mempty
-      case r of
-        (Just (eid', next, _), vp) -> do
-           let vp' = fmap (second (flip runHTML ctx)) vp
-           pure (Just (eid', next, foldr (\(path, v) h -> patch (path, v) h) v vp'), Nothing)
-        (Nothing, vp) -> pure (Nothing, Nothing)
+
+      -- r <- go m eid p mempty
+      -- case r of
+      --   (Just (eid', next, _), vp) -> do
+      --      let vp' = fmap (second (flip runHTML ctx)) vp
+      --      pure (Just (eid', next, foldr (\(path, v) h -> patch (path, v) h) v vp'), Nothing)
+      --   (Nothing, vp) -> pure (Nothing, Nothing)
   
     _ -> pure (Nothing, Nothing)
   where
@@ -95,13 +105,13 @@ push ctx@(Context nid e v) es = do
 
     left (Left a) = a
 
-    go m' eid p v = do
-      (r, eid', _) <- Syn.stepAll' m' nid eid (runView e p) Syn.E
-      case r of
-        Left (Just (Left a)) -> pure (Nothing, v)
-        Left (Just (Right (vp, next))) -> go mempty eid' next vp
-        Left Nothing -> pure (Nothing, v)
-        Right p' -> pure (Just (eid', left <$> liftSyn p', v), v)
+    -- go m' eid p v = do
+    --   (r, eid', _) <- Syn.stepAll' m' nid eid (runView e p) Syn.E
+    --   case r of
+    --     Left (Just (Left a)) -> pure (Nothing, v)
+    --     Left (Just (Right (vp, next))) -> go mempty eid' next vp
+    --     Left Nothing -> pure (Nothing, v)
+    --     Right p' -> pure (Just (eid', left <$> liftSyn p', v), v)
 
 el :: T.Text -> [Props a] -> [VSyn HTML a] -> VSyn HTML a
 el e attrs children = do
