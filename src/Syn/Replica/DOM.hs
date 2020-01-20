@@ -34,6 +34,15 @@ data Context a = Context
 
 newtype HTML = HTML { runHTML :: Context () -> R.HTML }
 
+instance A.ToJSON HTML where
+  toJSON (HTML v) = A.toJSON (v undefined)
+
+instance Semigroup HTML where
+  HTML a <> HTML b = HTML (a <> b)
+
+instance Monoid HTML where
+  mempty = HTML $ \_ -> mempty
+
 newContext :: Syn.NodeId -> VSyn HTML a -> IO (Context a)
 newContext nid p = do
   ve <- Syn.newEvent' (<>) nid
@@ -46,30 +55,36 @@ patch ([], v) _ = error "patch"
 patch ([p], v) h
   | p >= length h = h <> take (p - length h) (repeat $ VText "") <> v
   | otherwise = take p h <> v <> drop (p + 1) h
-patch ((p:ps), v) h = take p h <> [patchChildren ps v (h !! p)] <> drop (p + 1) h
-  where
-    patchChildren ps v n@(VNode e attrs children)
-      -- = trace ("TRACE: " <> show (A.encode n)) $ VNode e attrs (patch (ps, v) children)
-      = VNode e attrs (patch (ps, v) children)
-    patchChildren _ _ n = error (show $ A.encode n)
+-- patch ((p:ps), v) h = take p h <> [patchChildren ps v (h !! p)] <> drop (p + 1) h
+--   where
+--     patchChildren ps v n@(VNode e attrs children)
+--       -- = trace ("TRACE: " <> show (A.encode n)) $ VNode e attrs (patch (ps, v) children)
+--       = VNode e attrs (patch (ps, v) children)
+--     patchChildren _ _ n = error (show $ A.encode n)
 
 push :: Context () -> [Syn.EventValue] -> IO (Maybe ())
 push ctx@(Context nid e v) es = do
   modifyMVar v $ \v -> case v of
     Just (eid, p, v) -> do
-      (r, eid', _) <- Syn.stepAll' m nid eid (runView e p) Syn.E
+      -- (r, eid', _) <- Syn.stepAll' m nid eid (runView e p) Syn.E
   
-      case r of
-        Left (Just (Left a)) -> pure (Nothing, Just a)
-        Left (Just (Right (vp, next))) -> do
-          let vp' = fmap (second (flip runHTML ctx)) (vp)
+      -- case r of
+      --   Left (Just (Left a)) -> pure (Nothing, Just a)
+      --   Left (Just (Right (vp, next))) -> do
+      --     let vp' = fmap (second (flip runHTML ctx)) vp
 
-          traceIO $ show $ "VP: " <> A.encode vp'
-          -- traceIO $ show $ "V BEFORE: "<> A.encode v
+      --     traceIO $ show $ "VP: " <> A.encode vp'
+      --     traceIO $ show $ "V BEFORE: "<> A.encode v
   
-          pure (Just (eid', next, foldr (\(path, v) h -> patch (reverse path, v) h) v vp'), Nothing)
-        Left Nothing -> pure (Nothing, Nothing)
-        Right p' -> pure (Just (eid', left <$> liftSyn p', v), Nothing)
+      --     pure (Just (eid', next, foldr (\(path, v) h -> patch (path, v) h) v vp'), Nothing)
+      --   Left Nothing -> pure (Nothing, Nothing)
+      --   Right p' -> pure (Just (eid', left <$> liftSyn p', v), Nothing)
+      r <- go m eid p mempty
+      case r of
+        (Just (eid', next, _), vp) -> do
+           let vp' = fmap (second (flip runHTML ctx)) vp
+           pure (Just (eid', next, foldr (\(path, v) h -> patch (path, v) h) v vp'), Nothing)
+        (Nothing, vp) -> pure (Nothing, Nothing)
   
     _ -> pure (Nothing, Nothing)
   where
@@ -80,10 +95,18 @@ push ctx@(Context nid e v) es = do
 
     left (Left a) = a
 
+    go m' eid p v = do
+      (r, eid', _) <- Syn.stepAll' m' nid eid (runView e p) Syn.E
+      case r of
+        Left (Just (Left a)) -> pure (Nothing, v)
+        Left (Just (Right (vp, next))) -> go mempty eid' next vp
+        Left Nothing -> pure (Nothing, v)
+        Right p' -> pure (Just (eid', left <$> liftSyn p', v), v)
+
 el :: T.Text -> [Props a] -> [VSyn HTML a] -> VSyn HTML a
 el e attrs children = do
   attrs' <- traverse toAttr attrs
-  view (HTML $ \ctx -> [VNode e (M.fromList $ fmap (second ($ ctx) . fst) attrs') []]) (children <> concatMap snd attrs')
+  view (\ch -> HTML $ \ctx -> [VNode e (M.fromList $ fmap (second ($ ctx) . fst) attrs') (concat $ fmap (($ ctx) . runHTML) ch)]) (children <> concatMap snd attrs')
   where
     toAttr :: Props a -> VSyn HTML ((T.Text, Context () -> Attr), [VSyn HTML a])
     toAttr (Props k (PropText v)) = pure ((k, \_ -> AText v), [])
@@ -96,7 +119,7 @@ el e attrs children = do
       pure ((k, \ctx -> AMap $ M.fromList $ fmap (second ($ ctx) . fst) m'), concatMap snd m')
 
 text :: T.Text -> VSyn HTML a
-text txt = view (HTML $ \_ -> [VText txt]) []
+text txt = view (\_ -> HTML $ \_ -> [VText txt]) []
 
 -- | https://developer.mozilla.org/en-US/docs/Web/HTML/Element/div
 div :: [Props a] -> [VSyn HTML a] -> VSyn HTML a

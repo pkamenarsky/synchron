@@ -616,9 +616,9 @@ stepAll = go []
     go es m nid eid p v = do
       (eid', p', v', eks, u) <- stepOnce m nid eid p v
 
-      -- traceIO ("> " <> show p <> ", Events: " <> intercalate "," (map (flip evColor "▲") eks) <> ", U: " <> show u)
-      -- traceIO ("< " <> show p')
-      -- traceIO ""
+      traceIO ("> " <> show p <> ", Events: " <> intercalate "," (map (flip evColor "▲") eks) <> ", U: " <> show u)
+      traceIO ("< " <> show p')
+      traceIO ""
 
       case (p', u) of
         (Syn (Pure a), _) -> pure (Left (Just a), v', (eks, p):es)
@@ -631,9 +631,9 @@ stepAll' = go []
     go es m nid eid p v = do
       (eid', p', v', eks, u) <- stepOnce m nid eid p v
 
-      -- traceIO ("> " <> show p <> ", Events: " <> intercalate "," (map (flip evColor "▲") eks) <> ", U: " <> show u)
-      -- traceIO ("< " <> show p')
-      -- traceIO ""
+      traceIO ("> " <> show p <> ", Events: " <> intercalate "," (map (flip evColor "▲") eks) <> ", U: " <> show u)
+      traceIO ("< " <> show p')
+      traceIO ""
 
       case (p', u) of
         (Syn (Pure a), _) -> pure (Left (Just a), eid', (eks, p):es)
