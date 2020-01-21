@@ -30,14 +30,43 @@ import Debug.Trace
 data Context a = Context
   Syn.NodeId
   (Syn.Event Syn.Internal [ViewPatch HTML])
-  (MVar (Maybe (Int, VSyn HTML a, R.HTML)))
+  (MVar (Maybe (Int, Syn.Syn () (Either a ([ViewPatch HTML], VSyn HTML a)), R.HTML)))
 
 newtype HTML = HTML { runHTML :: Context () -> R.HTML }
+  deriving (Monoid, Semigroup)
 
 newContext :: Syn.NodeId -> VSyn HTML a -> IO (Context a)
 newContext nid p = do
-  ve <- Syn.newEvent' (<>) nid
-  Context <$> pure nid <*> pure ve <*> newMVar (Just (0, p, []))
+  e <- Syn.newEvent' (<>) nid
+  Context <$> pure nid <*> pure e <*> newMVar (Just (0, runView e p, []))
+
+data T = N [(Int, T)]
+data P = P Int | L Int
+
+type ViewPatch' v = ([P], v)
+
+patchT :: Path -> [P] -> T -> (T, Path)
+patchT path [L i] t = (t, i:path)
+
+
+--------------------------------------------------------------------------------
+
+repeat' n x = take n (repeat x)
+replace n x xs = take n xs <> [x] <> drop (n + 1) xs
+
+patch' :: ViewPatch' R.HTML -> R.HTML -> T -> (R.HTML, T)
+patch' ([], v) _ _ = error "patch'"
+patch' ([L p], [v]) h (N n)
+  | p >= length h =
+      ( h <> repeat' (p - length h) (VText "") <> [v]
+      , N (n <> repeat' (p - length h + 1) (0, N []))
+      )
+  | otherwise =
+      ( replace p v h
+      , N (replace p (0, N []) n)
+      )
+patch' ((P p:ps), [v]) h (N n)
+  = undefined
 
 patch :: ViewPatch R.HTML -> R.HTML -> R.HTML 
 -- patch a b
@@ -55,21 +84,33 @@ patch ((p:ps), v) h = take p h <> [patchChildren ps v (h !! p)] <> drop (p + 1) 
 
 push :: Context () -> [Syn.EventValue] -> IO (Maybe ())
 push ctx@(Context nid e v) es = do
+  traceIO "--- Push"
+
   modifyMVar v $ \v -> case v of
     Just (eid, p, v) -> do
-      (r, eid', _) <- Syn.stepAll' m nid eid (runView e p) Syn.E
+      (r, eid', _) <- Syn.stepAll' m nid eid p Syn.E
   
       case r of
-        Left (Just (Left a)) -> pure (Nothing, Just a)
+        Left (Just (Left a)) -> do
+          traceIO "PURE"
+          pure (Nothing, Just a)
         Left (Just (Right (vp, next))) -> do
           let vp' = fmap (second (flip runHTML ctx)) (vp)
 
+          traceIO $ show $ "V BEFORE: "<> A.encode v
           traceIO $ show $ "VP: " <> A.encode vp'
-          -- traceIO $ show $ "V BEFORE: "<> A.encode v
+          traceIO $ show $ "V AFTER: "<> A.encode (foldr (\(path, v) h -> patch (reverse path, v) h) v vp')
+
+          traceIO ("FIRST: " <> show p)
+          traceIO ("NEXT : " <> show (runReaderT (getVSyn next) ([0], e)))
   
-          pure (Just (eid', next, foldr (\(path, v) h -> patch (reverse path, v) h) v vp'), Nothing)
-        Left Nothing -> pure (Nothing, Nothing)
-        Right p' -> pure (Just (eid', left <$> liftSyn p', v), Nothing)
+          pure (Just (eid', runView e next, foldr (\(path, v) h -> patch (reverse path, v) h) v vp'), Nothing)
+        Left Nothing -> do
+          traceIO "LEFT NOTHING"
+          pure (Nothing, Nothing)
+        Right p' -> do
+          traceIO "RIGHT"
+          pure (Just (eid', p', v), Nothing)
   
     _ -> pure (Nothing, Nothing)
   where
@@ -77,8 +118,6 @@ push ctx@(Context nid e v) es = do
       [ (ei, (Syn.EventValue (Syn.Event conc ei) a))
       | Syn.EventValue (Syn.Event conc ei) a <- es
       ]
-
-    left (Left a) = a
 
 el :: T.Text -> [Props a] -> [VSyn HTML a] -> VSyn HTML a
 el e attrs children = do

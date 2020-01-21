@@ -20,6 +20,7 @@ import qualified Syn as Syn
 
 -- REMOVE
 import Data.Typeable
+import Debug.Trace
 
 type Path = [Int]
 
@@ -30,12 +31,13 @@ newtype VSyn v a = VSyn { getVSyn :: R.ReaderT (Path, Syn.Event Syn.Internal [Vi
 
 instance Alternative (VSyn v) where
   empty = forever
-  VSyn a <|> VSyn b = VSyn $ R.ReaderT $ \(path, e) -> R.runReaderT a (siblingPath path, e) <|> R.runReaderT b (siblingPath (siblingPath path), e)
+  VSyn a <|> VSyn b = VSyn $ R.ReaderT $ \(path, e) -> R.runReaderT a (path, e) <|> R.runReaderT b (siblingPath path, e)
 
 -- TODO: this is atrocious
 siblingPath :: Path -> Path
-siblingPath p = init p <> [last p + 1]
-
+-- siblingPath p = init p <> [last p + 1]
+siblingPath (p:ps) = (p + 1):ps
+  
 liftSyn :: Syn.Syn () a -> VSyn v a
 liftSyn  = VSyn . lift
 
@@ -68,7 +70,7 @@ local = liftSyn $ Syn.local pure
 
 orr' :: VSyn v a -> VSyn v a -> VSyn v (a, VSyn v a)
 orr' (VSyn a) (VSyn b) = VSyn $ R.ReaderT $ \(path, e) -> do
-  (a, (ks, _)) <- Syn.orr' (R.runReaderT a (siblingPath path, e)) (R.runReaderT b (siblingPath (siblingPath path), e))
+  (a, (ks, _)) <- Syn.orr' (R.runReaderT a (path, e)) (R.runReaderT b (siblingPath path, e))
   pure (a, liftSyn ks)
 
 orr :: [VSyn v a] -> VSyn v a
@@ -95,14 +97,16 @@ instance Monoid (Orr v a) where
 liftOrr :: VSyn v a -> Orr v a
 liftOrr p = Orr ((,D) <$> p)
 
-view :: v -> [VSyn v a] -> VSyn v a
+view :: Monoid v => v -> [VSyn v a] -> VSyn v a
 view v children = VSyn $ R.ReaderT $ \(path, e) -> do
-  Syn.orr $ mconcat
+  a <- Syn.orr $ mconcat
     [ [ Syn.emit e [(path, v)] >> Syn.forever ]
     , [ R.runReaderT child (index:path, e)
       | (VSyn child, index) <- zip children [0..]
       ]
     ]
+  -- Syn.emit e [(path, mempty)]
+  pure a
 
 data Pool v = Pool (Syn.Event Syn.Internal (VSyn v ()))
 
@@ -136,11 +140,14 @@ text_ txt = view [R.VText txt] []
 div_ :: [VSyn R.HTML a] -> VSyn R.HTML a
 div_ children = view [R.VNode "div" mempty []] children
 
-runView :: Syn.Event Syn.Internal [ViewPatch v] -> VSyn v a -> Syn.Syn () (Either a ([ViewPatch v], VSyn v a))
+runView
+  :: Syn.Event Syn.Internal [ViewPatch v]
+  -> VSyn v a
+  -> Syn.Syn () (Either a ([ViewPatch v], VSyn v a))
 runView e (VSyn vp) = do
   (r, (ks, _)) <- Syn.orr' (Right <$> Syn.await e) (Left <$> R.runReaderT vp ([0], e))
   case r of
-    Left a  -> pure (Left a)
+    Left a  -> trace ("runView: Left: " <> show (R.runReaderT vp ([0], e))) $ pure (Left a)
     Right v -> pure (Right (v, liftSyn (left <$> ks)))
 
   where

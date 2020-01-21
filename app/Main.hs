@@ -36,6 +36,8 @@ import qualified Network.Wai.Handler.Replica as Replica
 
 import Prelude hiding (div, forever)
 
+import Debug.Trace
+
 -- testConcur :: IO ()
 -- testConcur = Log.logger $ \log -> do
 --   v1 <- registerDelay 1000000
@@ -182,7 +184,7 @@ runReplica' p = do
         pure $ Just
           ( v
           , ()
-          , \re -> fmap (putMVar block() >>) $ fireEvent v (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re)
+          , \re -> fmap (traceIO (show re) >> putMVar block() >>) $ fireEvent v (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re)
           )
       Nothing -> pure Nothing
 
@@ -380,3 +382,13 @@ synTodo t = do
       synInputOnEnter "" t
 
 synTodos = VSyn.pool synTodo'
+
+--------------------------------------------------------------------------------
+
+nested1 = do
+  a <- synInputOnEnter "" "START"
+  nested1
+
+nested t = do
+  t' <- VSyn.div [] [ VSyn.text t, VSyn.div [] [ VSyn.div [] [ synInputOnEnter "" "START" ] ] ]
+  nested t'
