@@ -394,13 +394,19 @@ advance nid eid ios (Syn (Free (Local conc f next))) v
 -- dyn
 advance nid eid ios (Syn (Free (Dyn e p ps next))) v
   = case p' of
-      Syn (Pure a) -> advance nid eid' ios' (Syn (next a)) v'
+      Syn (Pure a) -> advance nid eid' ios' (Syn (next a)) $ case v' of
+        P pv _ -> pv
+        v' -> v'
       otherwise -> (eid'', ios'', Syn (Free (Dyn e p' ps' next)), \_ -> DbgDone, v'') -- TODO: DbgDone
   where
-    (eid', ios', p', dbg', v') = advance nid (eid + 1) ios p v
+    pv = case v of
+      E -> E
+      P pv _ -> pv
+
+    (eid', ios', p', dbg', v') = advance nid eid ios p pv
     (eid'', ios'', ps', dbg'', v'') = go [] eid' ios' ps
 
-    go rps eid ios [] = (eid, ios, map fst rps, \_ -> DbgDone, V (foldV v' <> foldMap foldV (map (snd . fst) rps)))
+    go rps eid ios [] = (eid, ios, map fst (reverse rps), \_ -> DbgDone, P v' (V $ foldMap foldV (map (snd . fst) (reverse rps))))
     go rps eid ios ((p, v):ps) = case advance nid eid ios p v of
       (eid', ios', Syn (Pure a), dbg', v') -> go rps eid' ios' ps
       (eid', ios', p', dbg', v') -> go (((p', v'), dbg'):rps) eid' ios' ps

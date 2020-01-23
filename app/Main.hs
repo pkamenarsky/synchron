@@ -246,11 +246,11 @@ addition = do
 additions2 = andd (addition, addition)
 
 additions = pool $ \p -> do
-  spawn p addition
-  spawn p addition
-  spawn p addition
-  spawn p addition
-  spawn p addition
+  spawn p $ div [ key "1" ] [ addition ]
+  spawn p $ div [ key "2" ] [ addition ]
+  spawn p $ div [ key "3" ] [ addition ]
+  spawn p $ div [ key "4" ] [ addition ]
+  spawn p $ div [ key "5" ] [ addition ]
   Syn.forever
   
 --------------------------------------------------------------------------------
@@ -307,10 +307,10 @@ lr = l . r
 rl = r . l
 rr = r . r
 
-todo' p = do
+todo' x p = do
   t <- inputOnEnter "What needs to be done?" ""
-  spawn p (todo' p)
-  todo (Todo t False)
+  spawn p (div [ key (T.pack $ show x) ] [ todo (Todo t False) ])
+  todo' (x + 1) p
 
 todo t = do
   r <- div []
@@ -330,7 +330,7 @@ todo t = do
       div [ onDoubleClick ] [ text t ]
       inputOnEnter "" t
 
-todos = pool todo'
+todos = pool (todo' 0)
 
 --------------------------------------------------------------------------------
 
