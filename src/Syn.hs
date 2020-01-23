@@ -683,29 +683,14 @@ exhaust nid p = do
 
 -- Pools -----------------------------------------------------------------------
 
-data Pool v = Pool (Event Internal (Syn v ()))
+data Pool v = Pool (Event Internal [Syn v ()])
 
 pool :: Typeable v => Monoid v => (Pool v -> Syn v a) -> Syn v a
-pool f = local $ \e -> go e E $ mconcat
-  [ liftOrr (Right . Left <$> await e)
-  , liftOrr (Left <$> f (Pool e))
-  ]
-  where
-    go e v k = do
-      (r, v', k') <- orr [ fromJust (runOrr k) ]
-
-      case r of
-        Left a -> pure a
-        Right (Left p)  -> go e v' $ mconcat
-          [ liftOrr (Right . Left <$> await e)
-          , liftOrr (fmap (Right . Right) p)
-          , k'
-          ]
-        Right (Right _) -> go e v' k'
+pool f = local' (<>) $ \e -> Syn (liftF (Dyn e (f (Pool e)) [] id))
 
 spawn :: Pool v -> Syn v () -> Syn v ()
 spawn (Pool e) p = do
-  emit e p
+  emit e [p]
 
 --------------------------------------------------------------------------------
 
