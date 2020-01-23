@@ -40,33 +40,67 @@ newContext nid p = do
   e <- Syn.newEvent' (<>) nid
   Context <$> pure nid <*> pure e <*> newMVar (Just (0, runView e p, []))
 
-data T = N [(Int, T)]
-data P = P Int | L Int
+data T = N Int [T] | E deriving Show
+data P = P Int | L Int deriving Show
 
 type ViewPatch' v = ([P], v)
 
-patchT :: Path -> [P] -> T -> (T, Path)
-patchT path [L i] t = (t, i:path)
+-- childCount (N cnt _) = cnt
+-- childCount E = 0
+-- 
+-- replaceD d n x xs
+--   | n < length xs = take n xs <> [x] <> drop (n + 1) xs
+--   | otherwise = xs <> repeat' (n - length xs) d <> [x]
+-- 
+-- indexD d n xs
+--   | n < length xs = xs !! n
+--   | otherwise = d
 
+-- updateN i t (N ns) = N (replaceD (0, E) i (childCount t + 1, t) ns)
+-- updateN i t E = N (replaceD (0, E) i (childCount t + 1, t) [])
+-- 
+-- childN i (N ns) = indexD (0, E) i ns
+-- childN i E = indexD (0, E) i []
 
---------------------------------------------------------------------------------
+-- patchT :: [P] -> T -> (T, Path)
+-- patchT [] t = (t, [])
+-- patchT (L i:ps) n = (updateN i t' n, i:path)
+--   where
+--     (t', path) = patchT ps (snd (childN i n))
+-- patchT (P i:ps) n = (updateN i t' n, (pathOffset + np:nps))
+--   where
+--     (t', (np:nps)) = patchT ps (snd (childN i n))
+-- 
+--     ns = case n of
+--       N ns -> ns
+--       E -> []
+-- 
+--     pathOffset = sum (map fst (take i ns))
+-- 
+-- p1 = patchT [L 0] (N [])
+-- p2 = patchT [L 0, L 0] (N [])
+-- p3 = patchT [L 0, L 1] (fst p2)
+-- p4 = patchT [L 0, L 2] (fst p3)
 
 repeat' n x = take n (repeat x)
-replace n x xs = take n xs <> [x] <> drop (n + 1) xs
+replace d n x xs
+  | n < length xs = take n xs <> [x] <> drop (n + 1) xs
+  | otherwise = xs <> repeat' (n - length xs) d <> [x]
 
-patch' :: ViewPatch' R.HTML -> R.HTML -> T -> (R.HTML, T)
-patch' ([], v) _ _ = error "patch'"
-patch' ([L p], [v]) h (N n)
-  | p >= length h =
-      ( h <> repeat' (p - length h) (VText "") <> [v]
-      , N (n <> repeat' (p - length h + 1) (0, N []))
-      )
-  | otherwise =
-      ( replace p v h
-      , N (replace p (0, N []) n)
-      )
-patch' ((P p:ps), [v]) h (N n)
-  = undefined
+patch2 :: [P] -> T -> T
+patch2 [] t = t
+patch2 (L p:ps) (N cnt ns) = N (cnt + 1) (replace E p (patch2 ps n') ns)
+  where
+    n' | p < length ns = ns !! p
+       | otherwise = E
+patch2 (L p:ps) E = N 1 (replace E p (patch2 ps E) [])
+
+p1 = patch2 [L 0] E
+p2 = patch2 [L 0, L 1, L 1] p1
+p3 = patch2 [L 0, L 1, L 2] p2
+p4 = patch2 [L 1] p3
+
+--------------------------------------------------------------------------------
 
 patch :: ViewPatch R.HTML -> R.HTML -> R.HTML 
 -- patch a b

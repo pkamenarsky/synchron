@@ -22,6 +22,26 @@ import qualified Syn as Syn
 import Data.Typeable
 import Debug.Trace
 
+--------------------------------------------------------------------------------
+
+data Tuple a b r = Tuple { tFst :: a, tSnd :: b r }
+
+instance Functor b => Functor (Tuple a b) where
+  fmap f (Tuple a b) = Tuple a (f <$> b)
+
+instance (Monoid a, Applicative b) => Applicative (Tuple a b) where
+  pure a = Tuple mempty (pure a)
+  Tuple _ f <*> Tuple _ c = Tuple mempty (f <*> c)
+
+instance (Monoid a, Monad b) => Monad (Tuple a b) where
+  Tuple _ m >>= f = Tuple mempty (m >>= tSnd . f)
+
+instance (Monoid a, Alternative b) => Alternative (Tuple a b) where
+  empty = Tuple mempty empty
+  Tuple a b <|> Tuple a' b' = Tuple (a <> a') (b <|> b')
+
+--------------------------------------------------------------------------------
+
 type Path = [Int]
 
 type ViewPatch v = (Path, v)
