@@ -61,6 +61,8 @@ data Trail v a = Trail
   , trUnblock :: M.Map EventId EventValue -> IO Bool
   }
 
+data PoolResult a v = PoolResult (Syn v (Either a (Syn v (), PoolResult a v)))
+
 data SynF v next
   = Async (IO ()) next
 
@@ -76,6 +78,8 @@ data SynF v next
   | forall a b. Local (a -> a -> a) (Event Internal a -> Syn v b) (b -> next)
   | Emit EventValue next
   | forall t a. Await (Event t a) (a -> next)
+
+  | forall a b. Dyn (Event Internal [Syn v ()]) (Syn v b) [(Syn v (), V v)] (b -> next)
 
   | forall a. Or (Syn v a) (Syn v a) ((a, (Syn v a, V v)) -> next)
   | forall a b. And (Syn v a) (Syn v b) ((a, b) -> next)
@@ -258,6 +262,18 @@ unblock m rsp@(Syn (Free (Await (Event _ eid') next)))
       Just (EventValue _ a) -> (Syn (next $ unsafeCoerce a), True)
       Nothing -> (rsp, False)
 
+-- dyn
+-- TODO: should new trail be unblocked by current cycle as well? answer: NO (i.e. an emit won't have been evaluated)
+unblock m rsp@(Syn (Free (Dyn e@(Event _ eid') p ps next)))
+  = (Syn (Free (Dyn e p' (zip (map fst ps') (map snd ps) <> map (,E) newPs) next)), u || or (map snd ps'))
+  where
+    newPs = case M.lookup eid' m of
+              Just (EventValue _ ps) -> unsafeCoerce ps
+              Nothing -> []
+
+    (p', u) = unblock m p
+    ps' = map (unblock m) (map fst ps)
+
 -- emit
 unblock m rsp@(Syn (Free (Emit _ next))) = (Syn next, True)
 
@@ -374,6 +390,20 @@ advance nid eid ios rsp@(Syn (Free (MapView f m next))) v
 -- local
 advance nid eid ios (Syn (Free (Local conc f next))) v
   = advance nid (eid + 1) ios (f (Event conc (Internal (nid, eid))) >>= Syn . next) v
+
+-- dyn
+advance nid eid ios (Syn (Free (Dyn e p ps next))) v
+  = case p' of
+      Syn (Pure a) -> advance nid eid' ios' (Syn (next a)) v'
+      otherwise -> (eid'', ios'', Syn (Free (Dyn e p' ps' next)), \_ -> DbgDone, v'') -- TODO: DbgDone
+  where
+    (eid', ios', p', dbg', v') = advance nid (eid + 1) ios p v
+    (eid'', ios'', ps', dbg'', v'') = go [] eid' ios' ps
+
+    go rps eid ios [] = (eid, ios, map fst rps, \_ -> DbgDone, V (foldV v' <> foldMap foldV (map (snd . fst) rps)))
+    go rps eid ios ((p, v):ps) = case advance nid eid ios p v of
+      (eid', ios', Syn (Pure a), dbg', v') -> go rps eid' ios' ps
+      (eid', ios', p', dbg', v') -> go (((p', v'), dbg'):rps) eid' ios' ps
 
 -- emit
 advance nid eid ios rsp@(Syn (Free (Emit (EventValue (Event _ e) _) _))) v
@@ -533,6 +563,7 @@ advanceIO nid eid ios rsp@(Syn (Free (Or p q next))) v = do
 
 -- gather ----------------------------------------------------------------------
 
+-- TODO: MonoidMap
 concatEventValues :: EventValue -> EventValue -> EventValue
 concatEventValues (EventValue e@(Event conc _) a) (EventValue _ b) = EventValue e (a `conc` unsafeCoerce b)
 
@@ -557,6 +588,9 @@ gather (Syn (Free (Await _ _))) = M.empty
 
 -- emit
 gather (Syn (Free (Emit e@(EventValue (Event _ ei) _) next))) = M.singleton ei e
+
+-- dyn
+gather (Syn (Free (Dyn _ p ps _))) = M.unionWith concatEventValues (gather p) (M.unionsWith concatEventValues (map gather (map fst ps)))
 
 -- and
 gather (Syn (Free (And p q next))) = M.unionWith concatEventValues (gather q) (gather p)
