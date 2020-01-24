@@ -1,42 +1,42 @@
 module Var where
 
-import Type.Reflection
+import Data.Either (lefts, rights)
+import Data.List.NonEmpty
+import Data.Semigroup
 
 import Syn
 
-newtype Var a = Var (Event Internal (Either a (Event Internal a)))
+newtype Var a = Var (Event Internal [Either a (Event Internal a)])
 
-newVar :: Typeable v => Monoid v => a -> (Var a -> Syn v b) -> Syn v b
-newVar a f = local $ \e -> go a e $ mconcat
-  [ Left  <$> liftOrr (f (Var e))
-  , Right <$> liftOrr (await e)
-  ]
+newVar :: Semigroup a => Monoid v => a -> (Var a -> Syn v b) -> Syn v b
+newVar a f = local' (<>) $ \e -> pool $ \p -> do
+  spawn p (trail a e)
+  f (Var e)
   where
-    go a e ks = do
-      (r, _, ks') <- unsafeRunOrr ks
-      case r of
-        Left b -> pure b
-        Right (Left a') -> go a' e $ mconcat
-          [ ks'
-          , Right <$> liftOrr (await e)
-          ]
-        Right (Right c) -> go a e $ mconcat
-          [ Orr $ fmap fst $ andd (unsafeRunOrr ks', emit c a)
-          , Right <$> liftOrr (await e)
-          ]
+    trail a e = do
+      r <- await e
+      let a' = case sconcat <$> nonEmpty (lefts r) of
+                 Just a' -> a'
+                 Nothing -> a
+            
+          es = case rights r of
+                 [] -> [pure ()]
+                 es -> fmap (flip emit a') es
+
+      snd <$> andd (andd' es, trail a' e)
 
 readVar :: Var a -> Syn v a
-readVar (Var e) = local $ \c -> do
-  emit e (Right c)
-  await c
+readVar (Var e) = local $ \c -> snd <$> andd (emit e [Right c], await c)
 
 putVar :: Var a -> a -> Syn v ()
-putVar (Var e) a = emit e (Left a)
+putVar (Var e) a = emit e [Left a]
 
--- testVars = newVar 5 $ \v -> do
---   putVar v 6
---   putVar v 7
---   a <- readVar v
---   _ <- andd' [putVar v 8, putVar v 9, putVar v 10]
---   b <- readVar v
---   pure (a, b)
+-- TODO: order is swapped, Last = First
+testVars :: Syn () (Last Int, Last Int, Last Int)
+testVars = newVar (Last 5) $ \v -> do
+  putVar v (Last 6)
+  a <- readVar v
+  _ <- andd' [putVar v (Last 8), putVar v (Last 9), putVar v (Last 10)]
+  b <- readVar v
+  (_, c) <- andd (putVar v (Last 11), readVar v)
+  pure (a, b, c)
