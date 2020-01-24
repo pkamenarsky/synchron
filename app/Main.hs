@@ -12,6 +12,7 @@ import Control.Monad (forever)
 
 import qualified Data.Map as M
 import qualified Data.Text as T
+import           Data.Semigroup (Last (..))
 
 import qualified Connector.WebSocket as WS
 
@@ -20,12 +21,14 @@ import qualified Connector.HTTP as HTTP
 
 import           Replica.VDOM             (Attr(AText, ABool, AEvent, AMap), HTML, DOMEvent, VDOM(VNode, VText), defaultIndex, fireEvent)
 import           Replica.VDOM.Types       (DOMEvent(DOMEvent))
-import           Replica.DOM
+import           Replica.DOM hiding       (var)
 import           Replica.Props hiding (async)
 import           Replica.Events
 import           Syn
 import qualified Syn.View as VSyn
 import qualified Syn.Replica.DOM as VSyn
+
+import           Var
 
 import Network.HTTP.Types.Status
 import Network.WebSockets.Connection
@@ -34,7 +37,7 @@ import Network.Wai
 import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai.Handler.Replica as Replica
 
-import Prelude hiding (div, forever)
+import Prelude hiding (div, forever, span)
 
 import Debug.Trace
 
@@ -307,30 +310,53 @@ lr = l . r
 rl = r . l
 rr = r . r
 
-todo' x p = do
-  t <- inputOnEnter "What needs to be done?" ""
-  spawn p (div [ key (T.pack $ show x) ] [ todo (Todo t False) ])
-  todo' (x + 1) p
+data Filter = Active | Inactive | All deriving Show
 
-todo t = do
-  r <- div []
-    [ ll <$> input [ type_ "checkbox", checked (done t), onChange ]
-    , rl <$> ttext (task t)
-    , rr <$> div [ onClick ] [ text "x" ]
-    ]
-  case r of
-    Right (Left task') -> do
-      todo (t { task = task' })
-    Left (Left _) -> do
-      todo (t { done = not (done t) })
-    Right (Right _) -> pure ()
+todo' v x p = do
+  t <- inputOnEnter "What needs to be done?" ""
+  spawn p (div [ key (T.pack $ show x) ] [ todo v (Todo t False) ])
+  todo' v (x + 1) p
+
+todo v t = stateVar v $ \s -> go s t
 
   where
+    go s t = if visible (s, done t)
+      then do
+        r <- div []
+          [ ll <$> input [ type_ "checkbox", checked (done t), onChange ]
+          , rl <$> ttext (task t)
+          , rr <$> span [ onClick ] [ text "     x" ]
+          , span [] [ text (T.pack $ show (done t)) ]
+          ]
+        case r of
+          Right (Left task') -> do
+            go s (t { task = task' })
+          Left (Left _) -> do
+            go s (t { done = not (done t) })
+          Right (Right _) -> pure (Right Nothing)
+      else pure (Right Nothing)
+
+    visible (Last All, _) = True
+    visible (Last Active, True) = True
+    visible (Last Inactive, False) = True
+    visible _ = False
+
     ttext t = do
-      div [ onDoubleClick ] [ text t ]
+      span [ onDoubleClick ] [ text t ]
       inputOnEnter "" t
 
-todos = pool (todo' 0)
+todos = var (Last All) $ \v -> pool $ \p -> do
+  spawn p (filters v)
+  todo' v 0 p
+  where
+    filters v = stateVar v $ \s -> do
+      r <- div []
+        [ div [] [ text (T.pack $ show s) ]
+        , All <$ div [ onClick ] [ text "All" ]
+        , Active <$ div [ onClick ] [ text "Active" ]
+        , Inactive <$ div [ onClick ] [ text "Inactive" ]
+        ]
+      pure (Right (Just (Last r)))
 
 --------------------------------------------------------------------------------
 
