@@ -32,7 +32,9 @@ readVar (Var e) = local $ \c -> snd <$> andd (emit e [Right c], await c)
 putVar :: Var a -> a -> Syn v ()
 putVar (Var e) a = emit e [Left a]
 
-stateVar :: Semigroup a => Monoid v => Var a -> (a -> Syn v (Either b (Maybe a))) -> Syn v b
+data Stream v a = Stream (Syn v (Either a (Stream v a)))
+
+stateVar :: Semigroup a => Monoid v => Var a -> (a -> Stream v a) -> Syn v b
 stateVar v@(Var e) f = do
   a <- readVar v
   go f a e
