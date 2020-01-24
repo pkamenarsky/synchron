@@ -61,8 +61,6 @@ data Trail v a = Trail
   , trUnblock :: M.Map EventId EventValue -> IO Bool
   }
 
-data PoolResult a v = PoolResult (Syn v (Either a (Syn v (), PoolResult a v)))
-
 data SynF v next
   = Async (IO ()) next
 
@@ -691,7 +689,7 @@ exhaust nid p = do
 
 data Pool v = Pool (Event Internal [Syn v ()])
 
-pool :: Typeable v => Monoid v => (Pool v -> Syn v a) -> Syn v a
+pool :: Monoid v => (Pool v -> Syn v a) -> Syn v a
 pool f = local' (<>) $ \e -> Syn (liftF (Dyn e (f (Pool e)) [] id))
 
 spawn :: Pool v -> Syn v () -> Syn v ()
@@ -759,3 +757,22 @@ newTrail (Context nid ctx) = do
           let (p', u) = unblock m p
           pure (Just (eid, p', v), u)
     }
+
+--------------------------------------------------------------------------------
+
+data LocalState s = LocalState s (Event Internal s)
+
+withLocalState :: s -> (LocalState s -> Syn v a) -> Syn v a
+withLocalState s f = local $ \e -> f (LocalState s e)
+
+state :: Monoid v => Event Internal s -> s -> (s -> Syn v (Either a s)) -> Syn v a
+state e s p = do
+  r <- orr [ Left <$> (p s), Right <$> await e ]
+  case r of
+    Left (Left a) -> pure a
+    Left (Right s') -> state e s' p
+    Right s' -> state e s' p
+
+observe :: Monoid v => Event Internal s -> s -> (s -> Syn v a) -> Syn v a
+observe e s p = state e s (\s -> Left <$> p s)
+
