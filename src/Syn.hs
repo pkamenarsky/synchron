@@ -92,8 +92,8 @@ newtype Syn v a = Syn { getSyn :: Free (SynF v) a }
 instance MonadFail (Syn v) where
   fail e = error e
 
-instance (Monoid v) => Alternative (Syn v) where
-  empty = forever
+instance Monoid v => Alternative (Syn v) where
+  empty = view mempty >> forever
   a <|> b = orr [a, b]
 
 color :: Int -> String -> String
@@ -107,9 +107,10 @@ instance Show (Syn v a) where
   show (Syn (Pure a)) = "◆"
   show (Syn (Free (Async e _))) = "A"
   show (Syn (Free Forever)) = "∞"
-  show (Syn (Free (MapView _ m _))) = "MapView (" <> show m <> ")"
-  show (Syn (Free (View _ _))) = "View"
-  show (Syn (Free (Local _ _ _))) = "Local"
+  show (Syn (Free (Dyn _ p ps _))) = "dyn (" <> show p <> ") [" <> intercalate ", " (map (show . fst) ps) <> "]"
+  show (Syn (Free (MapView _ m _))) = "fmap (" <> show m <> ")"
+  show (Syn (Free (View _ _))) = "V"
+  show (Syn (Free (Local _ _ _))) = "local"
   show (Syn (Free (Emit (EventValue (Event _ e) _) _))) = evColor e "▲"
   show (Syn (Free (Await (Event _ e) _))) = evColor e "○"
   show (Syn (Free (Or a b _))) = "∨ [" <> intercalate ", " (map show [a, b]) <> "]"
@@ -443,10 +444,10 @@ advance nid eid ios rsp@(Syn (Free (And p q next))) v
 advance nid eid ios rsp@(Syn (Free (Or p q next))) v
   = case (p', q') of
       (Syn (Pure a), _)
-        -> let (eid''', ios''', p''', fd''', v''') = advance nid eid'' ios'' (Syn (next (a, (q', qv')))) (V (foldV pv'))
+        -> let (eid''', ios''', p''', fd''', v''') = advance nid eid'' ios'' (Syn (next (a, (q', qv')))) (V (foldV pv' <> foldV qv'))
            in (eid''', ios''', p''', \dbg -> DbgJoin (fd''' dbg), v''')
       (_, Syn (Pure b))
-        -> let (eid''', ios''', p''', fd''', v''') = advance nid eid'' ios'' (Syn (next (b, (p', pv')))) (V (foldV qv'))
+        -> let (eid''', ios''', p''', fd''', v''') = advance nid eid'' ios'' (Syn (next (b, (p', pv')))) (V (foldV pv' <> foldV qv'))
            in (eid''', ios''', p''', \dbg -> DbgJoin (fd''' dbg), v''')
       _ -> (eid'', ios'', Syn (Free (Or p' q' next)), dbgcomp, v')
   where
