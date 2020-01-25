@@ -24,6 +24,7 @@ dependencies:
 - aeson
 - amqp
 - async
+- bytestring
 - containers
 - comonad
 - free

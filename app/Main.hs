@@ -10,6 +10,8 @@ import Control.Monad (void)
 
 import Control.Monad (forever)
 
+import qualified Data.Aeson as A
+import qualified Data.ByteString.Lazy.Char8 as BC
 import qualified Data.Map as M
 import qualified Data.Text as T
 import           Data.Semigroup (Last (..))
@@ -22,7 +24,7 @@ import qualified Connector.HTTP as HTTP
 import           Replica.VDOM             (Attr(AText, ABool, AEvent, AMap), HTML, DOMEvent, VDOM(VNode, VText), defaultIndex, fireEvent)
 import           Replica.VDOM.Types       (DOMEvent(DOMEvent))
 import           Replica.DOM hiding       (var)
-import           Replica.Props hiding (async)
+import           Replica.Props hiding     (async, loop)
 import           Replica.Events
 import           Syn
 import qualified Syn.View as VSyn
@@ -163,10 +165,10 @@ runReplica p = do
         r <- stepAll mempty nid eid p v
         case r of
           (Left _, v', _) -> do
-            -- print (show (runHTML (foldV v') (Context ctx)))
             pure (Nothing, Just (runHTML (foldV v') (Context nid ctx), (), \_ -> pure (pure ())))
           (Right (eid', p'), v', _) -> do
             let html = runHTML (foldV v') (Context nid ctx)
+            -- putStrLn (BC.unpack $ A.encode html)
             pure
               ( Just (eid', p', v')
               , Just (html, (), \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))
@@ -300,7 +302,7 @@ testDist = do
 data Todo = Todo
   { task :: T.Text
   , done :: Bool
-  }
+  } deriving Show
 
 l = Left
 r = Right
@@ -317,10 +319,9 @@ todo' v x p = do
   spawn p (div [ key (T.pack $ show x) ] [ todo v (Todo t False) ])
   todo' v (x + 1) p
 
-todo v t = stateVar v $ \s -> go s t
-
+todo v t = loop v (go t)
   where
-    go s t = if visible (s, done t)
+    go t = stream $ \s -> if visible (s, done t)
       then do
         r <- div []
           [ ll <$> input [ type_ "checkbox", checked (done t), onChange ]
@@ -330,33 +331,48 @@ todo v t = stateVar v $ \s -> go s t
           ]
         case r of
           Right (Left task') -> do
-            go s (t { task = task' })
+            pure $ Right $ go (t { task = task' })
           Left (Left _) -> do
-            go s (t { done = not (done t) })
-          Right (Right _) -> pure (Right Nothing)
-      else pure (Right Nothing)
+            pure $ Right $ go (t { done = not (done t) })
+          Right (Right _) -> pure $ Left ()
+      else empty
 
     visible (Last All, _) = True
     visible (Last Active, True) = True
     visible (Last Inactive, False) = True
     visible _ = False
 
-    ttext t = do
-      span [ onDoubleClick ] [ text t ]
-      inputOnEnter "" t
+ttext t = do
+  span [ onDoubleClick ] [ text t ]
+  inputOnEnter "" t
 
 todos = var (Last All) $ \v -> pool $ \p -> do
   spawn p (filters v)
   todo' v 0 p
   where
-    filters v = stateVar v $ \s -> do
+    filters v = do
       r <- div []
-        [ div [] [ text (T.pack $ show s) ]
-        , All <$ div [ onClick ] [ text "All" ]
+        [ All <$ div [ onClick ] [ text "All" ]
         , Active <$ div [ onClick ] [ text "Active" ]
         , Inactive <$ div [ onClick ] [ text "Inactive" ]
         ]
-      pure (Right (Just (Last r)))
+      putVar v (Last r)
+      filters v
+
+--------------------------------------------------------------------------------
+
+todosingle = var (Last Inactive) $ \v -> todo v (Todo "asd" False)
+
+todosingle2 = do
+  r <- div []
+    [ ll <$> input [ type_ "checkbox", checked (done t), onChange ]
+    , rl <$> ttext (task t)
+    , rr <$> span [ onClick ] [ text "     x" ]
+    , span [] [ text (T.pack $ show (done t)) ]
+    ]
+  Syn.forever
+  where
+    t = Todo "test" False
 
 --------------------------------------------------------------------------------
 
