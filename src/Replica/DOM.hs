@@ -6,6 +6,7 @@
 
 module Replica.DOM where
 
+import           Control.Applicative      (empty)
 import           Control.Concurrent       (newEmptyMVar, putMVar, takeMVar)
 import           Control.Monad            (void)
 
@@ -30,8 +31,11 @@ el e attrs children = do
   attrs' <- traverse toAttr attrs
   mapView
     (\children -> HTML $ \ctx -> [VNode e (M.fromList $ fmap (second ($ ctx) . fst) attrs') (runHTML children ctx)])
-    (orr (children <> concatMap snd attrs'))
+    (children' attrs')
   where
+    children' attrs' = case children <> concatMap snd attrs' of
+      [] -> empty
+      cs -> orr cs
     toAttr :: Props a -> Syn HTML ((T.Text, Context HTML () -> Attr), [Syn HTML a])
     toAttr (Props k (PropText v)) = pure ((k, \_ -> AText v), [])
     toAttr (Props k (PropBool v)) = pure ((k, \_ -> ABool v), [])
