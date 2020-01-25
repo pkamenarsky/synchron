@@ -27,8 +27,6 @@ import           Replica.DOM hiding       (var)
 import           Replica.Props hiding     (async, loop)
 import           Replica.Events
 import           Syn
-import qualified Syn.View as VSyn
-import qualified Syn.Replica.DOM as VSyn
 
 import           Var
 
@@ -174,24 +172,6 @@ runReplica p = do
               , Just (html, (), \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))
               )
       Nothing -> pure (Nothing, Nothing)
-
-runReplica' :: VSyn.VSyn VSyn.HTML () -> IO ()
-runReplica' p = do
-  let nid = NodeId 0
-  ctx@(VSyn.Context _ _ ctxVar) <- VSyn.newContext nid p
-  block <- newMVar ()
-  VSyn.push ctx []
-  Warp.run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> do
-    takeMVar block
-    r <- readMVar ctxVar
-    case r of
-      Just (_, _, v) -> do
-        pure $ Just
-          ( v
-          , ()
-          , \re -> fmap (traceIO (show re) >> putMVar block() >>) $ fireEvent v (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re)
-          )
-      Nothing -> pure Nothing
 
 data ContainerProps = Click (Event Internal DOMEvent)
 data Container = Label T.Text | Number Int | Container [ContainerProps] [Container]
@@ -359,6 +339,8 @@ todos = var (Last All) $ \v -> pool $ \p -> do
       putVar v (Last r)
       filters v
 
+manytodos = div [] (take 100 $ repeat todos)
+
 --------------------------------------------------------------------------------
 
 todosingle = var (Last Inactive) $ \v -> todo v (Todo "asd" False)
@@ -373,64 +355,3 @@ todosingle2 = do
   Syn.forever
   where
     t = Todo "test" False
-
---------------------------------------------------------------------------------
-
-synCounter x = do
-  VSyn.div [ onClick ] [ VSyn.text (T.pack $ show x) ]
-  synCounter (x + 1)
-
-synCounters = VSyn.div [] [ synCounter 0, synCounter 1, synCounter 2 ]
-
-synInputOnEnter p v = do
-  e <- VSyn.input [ autofocus True, placeholder p, value v, Left <$> onInput, Right <$> onKeyDown ]
-  case e of
-    Left e  -> synInputOnEnter p (targetValue $ target e)
-    Right e -> if kbdKey e == "Enter"
-      then pure v
-      else synInputOnEnter p v
-
-synAddition = do
-  a <- synInputOnEnter "X" ""
-  VSyn.button [ onClick ] [ VSyn.text "Next" ]
-  b <- synInputOnEnter "Y" ""
-  VSyn.button [ onClick ] [ VSyn.text "Add" ]
-  VSyn.div [ onClick ] [ VSyn.text ("Result :" <> T.pack (show (read (T.unpack a) + read (T.unpack b)))) ]
-  synAddition
-
---------------------------------------------------------------------------------
-
-synTodo' p = do
-  t <- synInputOnEnter "What needs to be done?" ""
-  VSyn.spawn p (synTodo' p)
-  synTodo (Todo t False)
-
-synTodo t = do
-  r <- VSyn.div []
-    [ ll <$> VSyn.input [ type_ "checkbox", checked (done t), onChange ]
-    , rl <$> ttext (task t)
-    , rr <$> VSyn.div [ onClick ] [ VSyn.text "x" ]
-    ]
-  case r of
-    Right (Left task') -> do
-      synTodo (t { task = task' })
-    Left (Left _) -> do
-      synTodo (t { done = not (done t) })
-    Right (Right _) -> pure ()
-
-  where
-    ttext t = do
-      VSyn.div [ onDoubleClick ] [ VSyn.text t ]
-      synInputOnEnter "" t
-
-synTodos = VSyn.pool synTodo'
-
---------------------------------------------------------------------------------
-
-nested1 = do
-  a <- synInputOnEnter "" "START"
-  nested1
-
-nested t = do
-  t' <- VSyn.div [] [ VSyn.text t, VSyn.div [] [ VSyn.div [] [ synInputOnEnter "" "START" ] ] ]
-  nested t'

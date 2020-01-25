@@ -79,10 +79,8 @@ data SynF v next
 
   | forall a b. Dyn (Event Internal [Syn v ()]) (Syn v b) [(Syn v (), V v)] (b -> next)
 
-  | forall a. Or (Syn v a) (Syn v a) ((a, (Syn v a, V v)) -> next)
+  | forall a. Or (Syn v a) (Syn v a) (a -> next)
   | forall a b. And (Syn v a) (Syn v b) ((a, b) -> next)
-
-  | forall a b. And_T (Trail v a) (Trail v b) ((a, b) -> next)
 
 deriving instance Functor (SynF v)
 
@@ -160,10 +158,10 @@ await e = Syn $ liftF (Await e id)
 -- | Left biased.
 orr :: Monoid v => [Syn v a] -> Syn v a
 orr [a] = a
-orr [a, b] = fmap fst $ Syn $ liftF (Or a b id)
+orr [a, b] = Syn $ liftF (Or a b id)
 orr (a:as) = orr [a, orr as]
 
-orr' :: Monoid v => Syn v a -> Syn v a -> Syn v (a, (Syn v a, V v))
+orr' :: Monoid v => Syn v a -> Syn v a -> Syn v a
 orr' a b = Syn $ liftF (Or a b id)
 
 andd' :: [Syn v a] -> Syn v [a]
@@ -198,41 +196,6 @@ instance Andd (Syn v a, Syn v b, Syn v c, Syn v d, Syn v e, Syn v f) (Syn v (a, 
   andd (a, b, c, d, e, f) = do
     (k, (l, m, n, o, p)) <- andd (a, andd (b, c, d, e, f))
     pure (k, l, m, n, o, p)
-
---------------------------------------------------------------------------------
-
-data Orr v a = Orr (Syn v (a, V v, Orr v a)) | D
-  deriving (Functor, Show)
-
--- | runOrr will always advance the failing branches, i.e. after:
---
---   (a, ks) <- runOrr $ mconcat [ liftOrr (emit e ()), liftOrr (await e) ]
---
--- ks' continuation will contain an `await` which has received the event from
--- `emit` and thus has advanced. This is sometimes important (i.e. pools) and
--- stems from the fact that `unblock` will advance *all* parallel branches.
--- `advance` however takes the first successful branch and as such is left-biased.
-
-runOrr :: Orr v a -> Maybe (Syn v (a, V v, Orr v a))
-runOrr (Orr o) = Just o
-runOrr D = Nothing
-
-unsafeRunOrr :: Orr v a -> Syn v (a, V v, Orr v a)
-unsafeRunOrr (Orr o) = o
-unsafeRunOrr D = error "unsafeRunOrr: D"
-
-instance (Typeable v, Monoid v) => Semigroup (Orr v a) where
-  D <> q = q
-  p <> D = p
-  Orr p <> Orr q = Orr $ do
-    ((a, v, m), (n, v')) <- Syn (liftF (Or p q id))
-    pure (a, V (foldV v <> foldV v'), (m <> Orr n))
-
-instance (Typeable v, Monoid v) => Monoid (Orr v a) where
-  mempty = D
-
-liftOrr :: Syn v a -> Orr v a
-liftOrr p = Orr ((,E,D) <$> p)
 
 -- unblock ---------------------------------------------------------------------
 
@@ -444,10 +407,10 @@ advance nid eid ios rsp@(Syn (Free (And p q next))) v
 advance nid eid ios rsp@(Syn (Free (Or p q next))) v
   = case (p', q') of
       (Syn (Pure a), _)
-        -> let (eid''', ios''', p''', fd''', v''') = advance nid eid'' ios'' (Syn (next (a, (q', qv')))) (V (foldV pv' <> foldV qv'))
+        -> let (eid''', ios''', p''', fd''', v''') = advance nid eid'' ios'' (Syn (next a)) (V (foldV pv' <> foldV qv'))
            in (eid''', ios''', p''', \dbg -> DbgJoin (fd''' dbg), v''')
       (_, Syn (Pure b))
-        -> let (eid''', ios''', p''', fd''', v''') = advance nid eid'' ios'' (Syn (next (b, (p', pv')))) (V (foldV pv' <> foldV qv'))
+        -> let (eid''', ios''', p''', fd''', v''') = advance nid eid'' ios'' (Syn (next b)) (V (foldV pv' <> foldV qv'))
            in (eid''', ios''', p''', \dbg -> DbgJoin (fd''' dbg), v''')
       _ -> (eid'', ios'', Syn (Free (Or p' q' next)), dbgcomp, v')
   where
@@ -556,9 +519,9 @@ advanceIO nid eid ios rsp@(Syn (Free (Or p q next))) v = do
 
   case (p', q') of
     (Syn (Pure a), _)
-      -> advanceIO nid eid' ios' (Syn (next (a, (q', qv')))) (V (foldV pv'))
+      -> advanceIO nid eid' ios' (Syn (next a)) (V (foldV pv' <> foldV qv'))
     (_, Syn (Pure b))
-      -> advanceIO nid eid'' ios'' (Syn (next (b, (p', pv')))) (V (foldV qv'))
+      -> advanceIO nid eid'' ios'' (Syn (next b)) (V (foldV pv' <> foldV qv'))
     _ -> pure (eid'', ios'', Syn (Free (Or p' q' next)), v')
   where
   -- TODO: fromEmptyView, isE
