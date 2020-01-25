@@ -32,24 +32,22 @@ readVar (Var e) = local $ \c -> snd <$> andd (emit e [Right c], await c)
 putVar :: Var a -> a -> Syn v ()
 putVar (Var e) a = emit e [Left a]
 
-data Stream v a = Stream (Syn v (Either a (Stream v a)))
+data Stream v a b = Stream { runStream :: a -> Syn v (Either b (Stream v a b)) }
 
-stateVar :: Semigroup a => Monoid v => Var a -> (a -> Stream v a) -> Syn v b
-stateVar v@(Var e) f = do
+stream :: (a -> Syn v (Either b (Stream v a b))) -> Stream v a b
+stream = Stream
+
+loop :: Semigroup a => Monoid v => Var a -> Stream v a b -> Syn v b
+loop v@(Var e) f = do
   a <- readVar v
   go f a e
     
   where
-    go f' a e = do
-      r <- orr [ Left <$> f' a, Right <$> await e ]
+    go f a e = do
+      r <- orr [ Left <$> runStream f a, Right <$> await e ]
       case r of
         Left (Left a) -> pure a
-        Left (Right (Just a)) -> do
-          putVar v a
-          go f a e
-        Left (Right Nothing) -> do
-          -- TODO: view mempty: we shouldn't replace the view of f, probably
-          go (\_ -> view mempty >> forever) a e
+        Left (Right f') -> go f' a e
         Right r -> do
           let a' = case sconcat <$> nonEmpty (lefts r) of
                      Just a' -> a'
