@@ -1,3 +1,5 @@
+{-# LANGUAGE GADTs #-}
+
 module Var where
 
 import Data.Either (lefts, rights)
@@ -6,7 +8,18 @@ import Data.Semigroup
 
 import Syn
 
-newtype Var a = Var (Event Internal [Either a (Event Internal a)])
+data Var a where
+  Var :: (Event Internal [Either a (Event Internal a)]) -> Var a
+  VPure :: a -> Var a
+  VMap :: (a -> b) -> Var a -> Var b
+  VApply :: Var (a -> b) -> Var a -> Var b
+
+instance Functor Var where
+  fmap = VMap
+
+instance Applicative Var where
+  pure = VPure
+  (<*>) = VApply
 
 var :: Semigroup a => Monoid v => a -> (Var a -> Syn v b) -> Syn v b
 var a f = local' (<>) $ \e -> pool $ \p -> do
@@ -28,6 +41,9 @@ var a f = local' (<>) $ \e -> pool $ \p -> do
 
 readVar :: Var a -> Syn v a
 readVar (Var e) = local $ \c -> snd <$> andd (emit e [Right c], await c)
+readVar (VPure a) = pure a
+readVar (VMap f a) = f <$> readVar a
+readVar (VApply f a) = (\(f', a') -> f' a') <$> andd (readVar f, readVar a)
 
 putVar :: Var a -> a -> Syn v ()
 putVar (Var e) a = emit e [Left a]
