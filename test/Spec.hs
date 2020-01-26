@@ -148,16 +148,6 @@ p10 = local $ \i -> local $ \o -> pool $ \p -> do
       a <- await i
       go i o (x + a) (n - 1)
 
-p11 = do
-  (a, _, ks) <- fromJust $ runOrr $ mconcat
-    [ liftOrr (pure "a")
-    , liftOrr (pure "b")
-    , liftOrr (pure "c")
-    ]
-  (b, _, ks') <- fromJust $ runOrr ks
-  (c, _, ks'') <- fromJust $ runOrr ks'
-  pure (a, b, c)
-
 e12 result = event localNid $ \e -> do
   ctx <- run localNid $ do
     a <- andd' [ await e, await e ]
@@ -217,7 +207,6 @@ main = defaultMain $ testGroup "Example tests"
   , testCase "p9" $ test p9 18
   , testCase "p9_2" $ test p9_2 18
   , testCase "p10" $ test p10 (6,())
-  , testCase "p11" $ test p11 ("a","b","c")
 
   , testCase "e12" $ testE e12 ["E", "E"]
   , testCase "e13" $ testE e13 ("E","E","E",())

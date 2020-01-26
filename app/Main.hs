@@ -24,9 +24,12 @@ import qualified Connector.HTTP as HTTP
 import           Replica.VDOM             (Attr(AText, ABool, AEvent, AMap), HTML, DOMEvent, VDOM(VNode, VText), defaultIndex, fireEvent)
 import           Replica.VDOM.Types       (DOMEvent(DOMEvent))
 import           Replica.DOM hiding       (var)
+import           Replica.SVG
+import           Replica.SVG.Props hiding (r)
 import           Replica.Props hiding     (async, loop)
 import           Replica.Events
 import           Syn
+import           Syn.SVG.Replica
 
 import           Var
 
@@ -40,6 +43,7 @@ import qualified Network.Wai.Handler.Replica as Replica
 import Prelude hiding (div, forever, span)
 
 import Debug.Trace
+import System.IO.Unsafe
 
 -- testConcur :: IO ()
 -- testConcur = Log.logger $ \log -> do
@@ -150,29 +154,6 @@ main = pure ()
 
 -- Replica ---------------------------------------------------------------------
 
-runReplica :: Syn Replica.DOM.HTML () -> IO ()
-runReplica p = do
-  let nid = NodeId 0
-  ctx   <- newMVar (Just (0, p, E))
-  block <- newMVar ()
-  Warp.run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> do
-    takeMVar block
-
-    modifyMVar ctx $ \ctx' -> case ctx' of
-      Just (eid, p, v) -> do
-        r <- stepAll mempty nid eid p v
-        case r of
-          (Left _, v', _) -> do
-            pure (Nothing, Just (runHTML (foldV v') (Context nid ctx), (), \_ -> pure (pure ())))
-          (Right (eid', p'), v', _) -> do
-            let html = runHTML (foldV v') (Context nid ctx)
-            -- putStrLn (BC.unpack $ A.encode html)
-            pure
-              ( Just (eid', p', v')
-              , Just (html, (), \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))
-              )
-      Nothing -> pure (Nothing, Nothing)
-
 data ContainerProps = Click (Event Internal DOMEvent)
 data Container = Label T.Text | Number Int | Container [ContainerProps] [Container]
 
@@ -181,6 +162,7 @@ toHTML (Number x) = HTML $ \_ -> [VText (T.pack $ show x)]
 toHTML (Container props children) = HTML $ \ctx ->
   [ VNode "div"
       (M.fromList $ fmap (toProps ctx) props)
+      Nothing
       (concatMap (($ ctx) . runHTML . toHTML) children)
   ]
   where
@@ -328,6 +310,7 @@ ttext t = do
 
 todos = var (Last All) $ \v -> pool $ \p -> do
   spawn p (filters v)
+  spawn p (reactText v)
   todo' v 0 p
   where
     filters v = do
@@ -355,3 +338,30 @@ todosingle2 = do
   Syn.forever
   where
     t = Todo "test" False
+
+--------------------------------------------------------------------------------
+
+reactText v = loop v $ stream $ \s -> text (T.pack $ show s)
+
+remoteContext v = Syn.run 1 (reactText v)
+
+remoteText v = do
+  ctx <- remoteContext v
+  pure (remote $ newTrail ctx)
+
+testRemote = do
+  runReplica $ pool $ \p -> var (Last "") $ \v -> do
+    spawn p (go v)
+    spawn p (unsafePerformIO $ remoteText v)
+    Syn.forever
+  where
+    go v = do
+      s <- div [] [ inputOnEnter "" "" ]
+      putVar v (Last s)
+      go v
+
+--------------------------------------------------------------------------------
+
+trail p = runReplica $ svg
+  [ width "1000", height "1000", version "1.1", xmlns ]
+  [ synSvg' p ]

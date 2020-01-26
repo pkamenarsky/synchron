@@ -7,7 +7,7 @@
 module Replica.DOM where
 
 import           Control.Applicative      (empty)
-import           Control.Concurrent       (newEmptyMVar, putMVar, takeMVar)
+import           Control.Concurrent       (newEmptyMVar, modifyMVar, newMVar, putMVar, takeMVar)
 import           Control.Monad            (void)
 
 import           Replica.Props            (Props(Props), Prop(PropText, PropBool, PropEvent, PropMap), key)
@@ -18,19 +18,48 @@ import qualified Data.Text                as T
 
 import qualified Data.Map                 as M
 
-import           Replica.VDOM             (Attr(AText, ABool, AEvent, AMap), DOMEvent, VDOM(VNode, VText))
+import           Replica.VDOM             (Attr(AText, ABool, AEvent, AMap), DOMEvent, VDOM(VNode, VText), fireEvent, defaultIndex)
 import qualified Replica.VDOM             as R
+import           Replica.VDOM.Types       (DOMEvent(DOMEvent))
+import qualified Replica.VDOM.Types       as R
+
+import qualified Network.Wai.Handler.Warp as Warp
+import qualified Network.Wai.Handler.Replica as Replica
+import Network.WebSockets.Connection (defaultConnectionOptions)
 
 import           Syn
 
 newtype HTML = HTML { runHTML :: Context HTML () -> R.HTML }
   deriving (Semigroup, Monoid)
 
-el :: T.Text -> [Props a] -> [Syn HTML a] -> Syn HTML a
-el e attrs children = do
+runReplica :: Syn Replica.DOM.HTML () -> IO ()
+runReplica p = do
+  let nid = NodeId 0
+  ctx   <- newMVar (Just (0, p, E))
+  block <- newMVar ()
+  Warp.run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> do
+    takeMVar block
+
+    modifyMVar ctx $ \ctx' -> case ctx' of
+      Just (eid, p, v) -> do
+        r <- stepAll mempty nid eid p v
+        case r of
+          (Left _, v', _) -> do
+            pure (Nothing, Just (runHTML (foldV v') (Context nid ctx), (), \_ -> pure (pure ())))
+          (Right (eid', p'), v', _) -> do
+            let html = runHTML (foldV v') (Context nid ctx)
+            -- putStrLn (BC.unpack $ A.encode html)
+            pure
+              ( Just (eid', p', v')
+              , Just (html, (), \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))
+              )
+      Nothing -> pure (Nothing, Nothing)
+
+el' :: Maybe R.Namespace -> T.Text -> [Props a] -> [Syn HTML a] -> Syn HTML a
+el' ns e attrs children = do
   attrs' <- traverse toAttr attrs
   mapView
-    (\children -> HTML $ \ctx -> [VNode e (M.fromList $ fmap (second ($ ctx) . fst) attrs') (runHTML children ctx)])
+    (\children -> HTML $ \ctx -> [VNode e (M.fromList $ fmap (second ($ ctx) . fst) attrs') ns (runHTML children ctx)])
     (children' attrs')
   where
     children' attrs' = case children <> concatMap snd attrs' of
@@ -44,6 +73,9 @@ el e attrs children = do
     toAttr (Props k (PropMap m)) = do
       m' <- mapM toAttr m
       pure ((k, \ctx -> AMap $ M.fromList $ fmap (second ($ ctx) . fst) m'), concatMap snd m')
+
+el :: T.Text -> [Props a] -> [Syn HTML a] -> Syn HTML a
+el = el' Nothing
 
 text :: T.Text -> Syn HTML a
 text txt = view (HTML $ \_ -> [VText txt]) >> forever

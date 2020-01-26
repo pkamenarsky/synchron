@@ -24,14 +24,14 @@ packages:
       sha256: 37fbd822c4b163189e676bd7d7dfcbef24ea3dfc989a66a20352283f4b02b46d
     name: replica
     version: 0.1.0.0
-    git: https://github.com/pkamenarsky/replica.git
+    git: https://github.com/seagreen/replica.git
     pantry-tree:
       size: 1319
-      sha256: 26ae65774e11b998f44a789706856ecc5e4689bcc55d5d413f8e7a49bca9cdaa
-    commit: 4d93f16fe7397ee13a8842a01dad9224870c025e
+      sha256: 02709671bc932e6e5106cb3113b4eb6cd2c232e9cd1b38234c7c6da7d1215833
+    commit: b265e6edc3e9dadb4011628761cd2642c2d4b34c
   original:
-    git: https://github.com/pkamenarsky/replica.git
-    commit: 4d93f16fe7397ee13a8842a01dad9224870c025e
+    git: https://github.com/seagreen/replica.git
+    commit: b265e6edc3e9dadb4011628761cd2642c2d4b34c
 snapshots:
 - completed:
     size: 498155
