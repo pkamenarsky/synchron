@@ -346,16 +346,20 @@ reactText v = loop v $ stream $ \s -> do
   counter 0
   text (T.pack $ show s)
 
-remoteContext v = Syn.run 1 (reactText v)
+remoteContext nid v = Syn.run nid (reactText v)
 
-remoteText v = do
-  ctx <- remoteContext v
+remoteText nid v = do
+  ctx <- remoteContext nid v
   newTrail ctx
 
 testRemote = do
   runReplica $ pool $ \p -> var (Last "") $ \v -> do
     spawn p (go v)
-    spawn p (remote $ remoteText v)
+    spawn p (remote $ remoteText 1 v)
+    spawn p (remote $ remoteText 2 v)
+    spawn p (remote $ remoteText 3 v)
+    spawn p (remote $ remoteText 4 v)
+    spawn p (remote $ remoteText 5 v)
     Syn.forever
   where
     go v = do
