@@ -341,18 +341,21 @@ todosingle2 = do
 
 --------------------------------------------------------------------------------
 
-reactText v = loop v $ stream $ \s -> text (T.pack $ show s)
+reactText v = loop v $ stream $ \s -> do
+  div [ onClick ] [ text "CLICK ME!!!" ]
+  counter 0
+  text (T.pack $ show s)
 
 remoteContext v = Syn.run 1 (reactText v)
 
 remoteText v = do
   ctx <- remoteContext v
-  pure (remote $ newTrail ctx)
+  newTrail ctx
 
 testRemote = do
   runReplica $ pool $ \p -> var (Last "") $ \v -> do
     spawn p (go v)
-    spawn p (unsafePerformIO $ remoteText v)
+    spawn p (remote $ remoteText v)
     Syn.forever
   where
     go v = do
