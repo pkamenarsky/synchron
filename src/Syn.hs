@@ -592,21 +592,3 @@ newTrail (Context nid ctx) = do
           (p', u) <- unblockIO m p
           pure (Just (eid, p', v), u)
     }
-
---------------------------------------------------------------------------------
-
-data LocalState s = LocalState s (Event Internal s)
-
-withLocalState :: s -> (LocalState s -> Syn v a) -> Syn v a
-withLocalState s f = local $ \e -> f (LocalState s e)
-
-state :: Monoid v => Event Internal s -> s -> (s -> Syn v (Either a s)) -> Syn v a
-state e s p = do
-  r <- orr [ Left <$> (p s), Right <$> await e ]
-  case r of
-    Left (Left a) -> pure a
-    Left (Right s') -> state e s' p
-    Right s' -> state e s' p
-
-observe :: Monoid v => Event Internal s -> s -> (s -> Syn v a) -> Syn v a
-observe e s p = state e s (\s -> Left <$> p s)
