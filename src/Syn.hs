@@ -773,3 +773,16 @@ newTrail (Context nid ctx) = do
           (p', u) <- unblockIO m p
           pure (Just (eid, p', v), u)
     }
+
+--------------------------------------------------------------------------------
+
+data Mealy v a b = Mealy { runMealy :: a -> Syn v (a, Mealy v a b) } | Done b
+
+viewM :: Monoid v => [Mealy v a b] -> Mealy v [a] b
+viewM ms = go ms
+  where
+    replace i a as = take i as <> [a] <> drop (i + 1) as
+
+    go ms = Mealy $ \as -> do
+      ((a, next), i) <- orr [ (,i) <$> runMealy m a | (i, (m, a)) <- zip [0..] (zip ms as) ]
+      pure (replace i a as,  go (replace i next ms))
