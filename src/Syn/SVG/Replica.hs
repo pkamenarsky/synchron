@@ -58,7 +58,7 @@ trail c color x y width height radius = orr
   where
     t = T.pack . show
 
-gridw = 16
+gridw = 12
 gridh = 30
 gridx = 50
 gridy = 50
