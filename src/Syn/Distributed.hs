@@ -26,8 +26,8 @@ import Syn (Syn (..), SynF (..), V (..), Event, EventId, EventValue, NodeId (..)
 
 newtype Frame = Frame Int deriving (Eq, Ord, Num, Show)
 
-newtype AwaitingId = AwaitingId EventId deriving (Eq, Ord, Show)
-newtype EmittedId = EmittedId EventId deriving (Eq, Ord, Show)
+type AwaitingId = Int
+type EmittedId = Int
 
 -- | An internal trail run
 newtype Run = Run { getRun :: [(Frame, Set AwaitingId, Set EmittedId)] }
@@ -39,9 +39,26 @@ transposeByFrame
   -> [(Frame, [(NodeId, Set AwaitingId, Set EmittedId)])]
 transposeByFrame = undefined
 
-data Coherent = Coherent | Restart
+data Coherent = Coherent | Restart deriving Show
 
-coherencyCut
-  :: [(NodeId, Set AwaitingId, Set EmittedId)]
-  -> [(NodeId, Coherent)]
-coherencyCut = undefined
+cut :: [(NodeId, (Set AwaitingId, Set EmittedId))] -> [(NodeId, Coherent)]
+cut [] = []
+cut step = list $ extend f z
+  where
+    Just z = zipper step
+
+    f :: ListZipper (NodeId, (Set AwaitingId, Set EmittedId)) -> (NodeId, Coherent)
+    f (ListZipper ls (nid, (as, _)) rs) =
+      ( nid
+      , if S.size (S.intersection as otherEs) > 0
+          then Restart
+          else Coherent
+      )
+      where
+        otherEs = S.unions [ es | (nid, (as, es)) <- ls <> rs ]
+
+testCut = cut
+  [ (0, (S.fromList [1, 2], S.fromList []))
+  , (1, (S.fromList [3], S.fromList [1]))
+  , (2, (S.fromList [], S.fromList [3]))
+  ]
