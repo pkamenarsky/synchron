@@ -27,17 +27,19 @@ import qualified Replica.VDOM             as R
 import           Replica.VDOM.Types       (DOMEvent(DOMEvent))
 import qualified Replica.VDOM.Types       as R
 
+import qualified Network.Wai
 import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai.Handler.Replica as Replica
-import Network.WebSockets.Connection (defaultConnectionOptions)
+import           Network.WebSockets.Connection (defaultConnectionOptions)
 
 import           Syn
+import           Debug.Trace
 
-newtype HTML = HTML { runHTML :: Trail HTML () -> R.HTML }
+newtype HTML = HTML { runHTML :: Notify -> R.HTML }
   deriving (Semigroup, Monoid)
 
-runReplica :: IO (Trail Replica.DOM.HTML ()) -> IO ()
-runReplica mkTrail = do
+runReplica :: Notify -> IO (Trail Replica.DOM.HTML ()) -> IO ()
+runReplica notify mkTrail = do
   Warp.run 3985 $ Replica.app'
     (defaultIndex "Synchron" [])
     defaultConnectionOptions
@@ -45,11 +47,11 @@ runReplica mkTrail = do
     spawn
   where
     wrapTrail vvar ch trail = trail
-      { trAdvance = do
-          (a, v) <- trAdvance trail
-          let html = foldV v
-          writeIORef vvar (Just html)
-          writeChan ch html
+      { trAdvance = \notify -> do
+          (a, v) <- trAdvance trail notify
+          let HTML html = foldV v
+          writeIORef vvar (Just (html notify))
+          writeChan ch (html notify)
           pure (a, v)
       }
 
@@ -60,56 +62,61 @@ runReplica mkTrail = do
 
       let trail = wrapTrail vvar ch trail'
       
-      runTrail trail
+      runTrail notify trail
 
       pure
-        ( (\(HTML html) -> html trail) <$> readChan ch
+        ( readChan ch
         , \re -> do
             v <- readIORef vvar
             case v of
               Nothing -> pure ()
-              Just (HTML html) -> fromMaybe (pure ())
+              Just v -> fromMaybe (pure ())
                 $ fireEvent
-                    (html trail)
+                    v
                     (Replica.evtPath re)
                     (Replica.evtType re)
                     (DOMEvent $ Replica.evtEvent re)
         )
 
-runReplicaTrail :: Trail Replica.DOM.HTML () -> IO (Trail Replica.DOM.HTML ())
-runReplicaTrail trail' = do
+runReplicaTrail
+  :: Notify
+  -> Trail Replica.DOM.HTML ()
+  -> IO (Network.Wai.Application, Trail Replica.DOM.HTML ())
+runReplicaTrail notify trail' = do
   ch     <- newChan
   vvar   <- newIORef Nothing
 
   let trail = wrapTrail vvar ch trail'
   
-  runTrail trail
+  runTrail notify trail
 
-  forkIO $ Warp.run 3985 $ Replica.app'
-    (defaultIndex "Synchron" [])
-    defaultConnectionOptions
-    Prelude.id $ pure
-    ( (\(HTML html) -> html trail) <$> readChan ch
-    , \re -> do
-        v <- readIORef vvar
-        case v of
-          Nothing -> pure ()
-          Just (HTML html) -> fromMaybe (pure ())
-            $ fireEvent
-                (html trail)
-                (Replica.evtPath re)
-                (Replica.evtType re)
-                (DOMEvent $ Replica.evtEvent re)
+  pure
+    ( Replica.app'
+        (defaultIndex "Synchron" [])
+        defaultConnectionOptions
+        Prelude.id $ pure
+        ( readChan ch
+        , \re -> do
+            v <- readIORef vvar
+            case v of
+              Nothing -> pure ()
+              Just v -> fromMaybe (pure ())
+                $ fireEvent
+                    v
+                    (Replica.evtPath re)
+                    (Replica.evtType re)
+                    (DOMEvent $ Replica.evtEvent re)
+        )
+
+    , trail
     )
-
-  pure trail
   where
     wrapTrail vvar ch trail = trail
-      { trAdvance = do
-          (a, v) <- trAdvance trail
-          let html = foldV v
-          writeIORef vvar (Just html)
-          writeChan ch html
+      { trAdvance = \notify -> do
+          (a, v) <- trAdvance trail notify
+          let HTML html = foldV v
+          writeIORef vvar (Just (html notify))
+          writeChan ch (html notify)
           pure (a, v)
       }
 
@@ -117,20 +124,20 @@ el' :: Maybe R.Namespace -> T.Text -> [Props a] -> [Syn HTML a] -> Syn HTML a
 el' ns e attrs children = do
   attrs' <- traverse toAttr attrs
   mapView
-    (\children -> HTML $ \ctx -> [VNode e (M.fromList $ fmap (second ($ ctx) . fst) attrs') ns (runHTML children ctx)])
+    (\children -> HTML $ \notify -> [VNode e (M.fromList $ fmap (second ($ notify) . fst) attrs') ns (runHTML children notify)])
     (children' attrs')
   where
     children' attrs' = case children <> concatMap snd attrs' of
       [] -> empty
       cs -> orr cs
-    toAttr :: Props a -> Syn HTML ((T.Text, Trail HTML () -> Attr), [Syn HTML a])
+    toAttr :: Props a -> Syn HTML ((T.Text, (M.Map EventId EventValue -> IO ()) -> Attr), [Syn HTML a])
     toAttr (Props k (PropText v)) = pure ((k, \_ -> AText v), [])
     toAttr (Props k (PropBool v)) = pure ((k, \_ -> ABool v), [])
     toAttr (Props k (PropEvent extract)) = local $ \e@(Event _ eid) -> do
-      pure ((k, \ctx -> AEvent $ \de -> notify ctx (M.singleton eid (EventValue e de))), [extract <$> await e])
+      pure ((k, \notify -> AEvent $ \de -> trace "DOMNOTIFY" $ notify (M.singleton eid (EventValue e de))), [extract <$> await e])
     toAttr (Props k (PropMap m)) = do
       m' <- mapM toAttr m
-      pure ((k, \ctx -> AMap $ M.fromList $ fmap (second ($ ctx) . fst) m'), concatMap snd m')
+      pure ((k, \notify -> AMap $ M.fromList $ fmap (second ($ notify) . fst) m'), concatMap snd m')
 
 el :: T.Text -> [Props a] -> [Syn HTML a] -> Syn HTML a
 el = el' Nothing

@@ -7,6 +7,7 @@ import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TChan
 import Control.Monad (void)
+import Control.Monad.Fix (mfix)
 
 import Control.Monad (forever)
 
@@ -247,7 +248,7 @@ background = div
 --------------------------------------------------------------------------------
 
 testDist = do
-    let remoteCounter = newTrail 1 Nothing (counter 0)
+    let remoteCounter = newTrail 1 (counter 0)
 
     run (NodeId 0) $ local $ \e -> do
       div [] [ remote remoteCounter, remote remoteCounter ]
@@ -344,7 +345,7 @@ reactText v = loop v $ stream $ \(Last s) -> do
   counter 0
   text (T.pack $ show s)
 
-remoteText nid v = newTrail nid Nothing (reactText v)
+remoteText nid v = newTrail nid (reactText v)
 
 testRemote = do
   runRep $ pool $ \p -> var (Last "") $ \v -> do
@@ -363,9 +364,29 @@ testRemote = do
 
 --------------------------------------------------------------------------------
 
+rrCounter notify = do
+  trail <- newTrail 0 (todos)
+  runReplicaTrail notify trail
+
+serverSide trail = do
+  remote trail
+
+everything = do
+  (app, serverTrail) <- mfix $ \(~(app, serverTrail)) -> do
+    (app, trail) <- rrCounter (notify serverTrail)
+
+    serverTrail <- newTrail 1 (serverSide (pure trail))
+    pure (app, serverTrail)
+
+  Warp.run 3985 app
+  where
+    notify trail e = stepAllTrail [e] (notify trail) trail
+
+--------------------------------------------------------------------------------
+
 trail p = runRep $ svg
   [ width "1000", height "1000", version "1.1", xmlns ]
   [ synSvg' p ]
 
 runRep p = do
-  runReplica (newTrail 0 Nothing p)
+  runReplica (\_ -> pure ()) (newTrail 0 p)
