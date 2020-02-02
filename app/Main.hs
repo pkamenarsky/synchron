@@ -189,7 +189,7 @@ counter x = do
   counter (x + 1)
 
 testReplica = do
-  runReplica' 0 Nothing $ local $ \e -> do
+  runRep $ local $ \e -> do
     div [ style [("color", "red")], onClick ] [ text "Synchron" ]
     div [ style [("color", "green")], onClick ] [ text "Synchron2" ]
     div [ style [("color", "blue")] ] [ text "Synchron3" ]
@@ -247,9 +247,7 @@ background = div
 --------------------------------------------------------------------------------
 
 testDist = do
-    ctx <- run (NodeId 1) (counter 0)
-
-    let remoteCounter = newTrail ctx
+    let remoteCounter = newTrail 1 Nothing (counter 0)
 
     run (NodeId 0) $ local $ \e -> do
       div [] [ remote remoteCounter, remote remoteCounter ]
@@ -346,14 +344,10 @@ reactText v = loop v $ stream $ \(Last s) -> do
   counter 0
   text (T.pack $ show s)
 
-remoteContext nid v = Syn.run nid (reactText v)
-
-remoteText nid v = do
-  ctx <- remoteContext nid v
-  newTrail ctx
+remoteText nid v = newTrail nid Nothing (reactText v)
 
 testRemote = do
-  runReplica' 0 Nothing $ pool $ \p -> var (Last "") $ \v -> do
+  runRep $ pool $ \p -> var (Last "") $ \v -> do
     spawn p (go v)
     spawn p (remote $ remoteText 1 v)
     spawn p (remote $ remoteText 2 v)
@@ -369,10 +363,10 @@ testRemote = do
 
 --------------------------------------------------------------------------------
 
-trail p = runReplica' 0 Nothing $ svg
+trail p = runRep $ svg
   [ width "1000", height "1000", version "1.1", xmlns ]
   [ synSvg' p ]
 
 runRep p = do
-  trail <- newTrail' 0 Nothing p
-  runReplicaTrail trail
+  trail <- newTrail 0 Nothing p
+  runReplica trail

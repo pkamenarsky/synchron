@@ -36,77 +36,10 @@ import           Syn
 newtype HTML = HTML { runHTML :: Trail HTML () -> R.HTML }
   deriving (Semigroup, Monoid)
 
-runReplica :: Syn Replica.DOM.HTML () -> IO ()
-runReplica p = undefined -- do
---   let nid = NodeId 0
---   ctx   <- newMVar (Just (0, p, E))
---   block <- newMVar ()
---   Warp.run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> do
---     takeMVar block
--- 
---     modifyMVar ctx $ \ctx' -> case ctx' of
---       Just (eid, p, v) -> do
---         r <- stepAll mempty nid eid p v
---         case r of
---           (Left _, v', _) -> do
---             pure (Nothing, Just (runHTML (foldV v') (Context nid ctx), (), \_ -> pure (pure ())))
---           (Right (eid', p'), v', _) -> do
---             let html = runHTML (foldV v') (Context nid ctx)
---             -- putStrLn (BC.unpack $ A.encode html)
---             pure
---               ( Just (eid', p', v')
---               , Just (html, (), \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))
---               )
---       Nothing -> pure (Nothing, Nothing)
-
-runReplica'
-  :: NodeId
-  -> Maybe (M.Map EventId EventValue -> IO ())
-  -> Syn Replica.DOM.HTML ()
-  -> IO ()
-runReplica' nid notify p = do
-  Warp.run 3985 $ Replica.app'
-    (defaultIndex "Synchron" [])
-    defaultConnectionOptions
-    Prelude.id
-    spawn
-  where
-    wrapTrail vvar ch trail = trail
-      { trAdvance = do
-          (a, v) <- trAdvance trail
-          let html = foldV v
-          writeIORef vvar (Just html)
-          writeChan ch html
-          pure (a, v)
-      }
-
-    spawn = do
-      ch     <- newChan
-      vvar   <- newIORef Nothing
-      trail' <- newTrail' nid notify p
-
-      let trail = wrapTrail vvar ch trail'
-
-      runTrail trail
-
-      pure (
-        (\(HTML html) -> html trail) <$> readChan ch
-        , \re -> do
-            v <- readIORef vvar
-            case v of
-              Nothing -> pure ()
-              Just (HTML html) -> fromMaybe (pure ())
-                $ fireEvent
-                    (html trail)
-                    (Replica.evtPath re)
-                    (Replica.evtType re)
-                    (DOMEvent $ Replica.evtEvent re)
-        )
-
-runReplicaTrail
+runReplica
   :: Trail Replica.DOM.HTML ()
   -> IO ()
-runReplicaTrail trail' = do
+runReplica trail' = do
   Warp.run 3985 $ Replica.app'
     (defaultIndex "Synchron" [])
     defaultConnectionOptions

@@ -761,35 +761,13 @@ event nid app = newEvent nid >>= app
 
 --------------------------------------------------------------------------------
 
-newTrail :: Monoid v => Context v a -> IO (Trail v a)
-newTrail (Context nid ctx) = do
-  pure $ Trail
-    { trNotify  = undefined
-    , trAdvance = modifyMVar ctx $ \ctx' -> case ctx' of
-        Nothing -> pure (Nothing, (Nothing, E))
-        Just (eid, p, v) -> do
-          (eid', ios, p', _, v') <- advanceIO nid eid [] p v
-          sequence_ ios
-          case p' of
-            Syn (Pure a) -> pure (Just (eid', p', v'), (Just a, v'))
-            _ -> pure (Just (eid', p', v'), (Nothing, v'))
-    , trGather  = modifyMVar ctx $ \ctx' -> case ctx' of
-        Nothing -> pure (Nothing, M.empty)
-        Just (_, p, _) -> (ctx',) <$> gatherIO p
-    , trUnblock = \m -> modifyMVar ctx $ \ctx' -> case ctx' of
-        Nothing -> pure (Nothing, False)
-        Just (eid, p, v) -> do
-          (p', u) <- unblockIO m p
-          pure (Just (eid, p', v), u)
-    }
-
-newTrail'
+newTrail
   :: Monoid v
   => NodeId
   -> Maybe (M.Map EventId EventValue -> IO ())
   -> Syn v a
   -> IO (Trail v a)
-newTrail' nid notify p = do
+newTrail nid notify p = do
   Context _ ctx <- run nid p
   pure $ Trail
     { trNotify  = notify
