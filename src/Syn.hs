@@ -163,9 +163,6 @@ orr [a] = a
 orr [a, b] = Syn $ liftF (Or a b id)
 orr (a:as) = orr [a, orr as]
 
-orr' :: Monoid v => Syn v a -> Syn v a -> Syn v a
-orr' a b = Syn $ liftF (Or a b id)
-
 andd' :: [Syn v a] -> Syn v [a]
 andd' [a] = (:[]) <$> a
 andd' [a, b] = do
@@ -227,7 +224,6 @@ unblock m rsp@(Syn (Free (Await (Event _ eid') next)))
       Nothing -> (rsp, False)
 
 -- dyn
--- TODO: should new trail be unblocked by current cycle as well? answer: NO (i.e. an emit won't have been evaluated)
 unblock m rsp@(Syn (Free (Dyn e@(Event _ eid') p ps next)))
   = (Syn (Free (Dyn e p' (zip (map fst ps') (map snd ps) <> map (,E) newPs) next)), u || or (map snd ps'))
   where
@@ -286,7 +282,6 @@ unblockIO m rsp@(Syn (Free (Await (Event _ eid') next)))
       Nothing -> pure (rsp, False)
 
 -- dyn
--- TODO: should new trail be unblockIOed by current cycle as well? answer: NO (i.e. an emit won't have been evaluated)
 unblockIO m rsp@(Syn (Free (Dyn e@(Event _ eid') p ps next))) = do
   (p', u) <- unblockIO m p
   ps' <- traverse (unblockIO m) (map fst ps)
@@ -675,9 +670,28 @@ stepAll = go []
       -- traceIO ""
 
       case (p', u) of
-        (Syn (Pure a), _) -> pure (Left (Just a), v', (eks, p):es)
-        (_, True) -> go ((eks, p):es) ms nid eid' p' v'
-        (_, False) -> pure (Right (eid', p'), v', (eks, p):es)
+        (Syn (Pure a), _) -> pure (Left (Just a), v', (eks, p'):es)
+        (_, True) -> go ((eks, p'):es) ms nid eid' p' v'
+        (_, False) -> pure (Right (eid', p'), v', (eks, p'):es)
+
+stepAllTrail :: Monoid v => [M.Map EventId EventValue] -> Trail v a -> IO ()
+stepAllTrail ms trail = go ms
+  where
+    go [] = do
+      trAdvance trail
+      m <- trGather trail
+      if M.size m > 0
+        then do
+          trUnblock trail m
+          go []
+        else do
+          trAdvance trail
+          pure ()
+    go (m':ms') = do
+      trAdvance trail
+      m <- trGather trail
+      trUnblock trail (m' <> m)
+      go ms'
 
 stepAll' :: Monoid v => M.Map EventId EventValue -> NodeId -> Int -> Syn v a -> V v -> IO (Either (Maybe a) (Syn v a), Int, [([EventId], Syn v a)])
 stepAll' = go []
@@ -731,21 +745,16 @@ type Application v a r = (a -> IO (Context v r)) -> IO (Context v r)
 run :: NodeId -> Syn v a -> IO (Context v a)
 run nid p = Context nid <$> newMVar (Just (0, p, E))
 
-push :: Typeable v => Monoid v => Context v b -> Event t a -> a -> IO (Maybe b, v)
+push :: Monoid v => Context v b -> Event t a -> a -> IO (Maybe b, v)
 push (Context nid v) (Event conc ei) a = modifyMVar v $ \v -> case v of
   Just (eid, p, v) -> do
-    r <- stepAll [M.singleton (setNid ei') (EventValue (Event conc ei') a)] nid eid p v
+    r <- stepAll [M.singleton ei (EventValue (Event conc ei) a)] nid eid p v
 
     case r of
       (Left a, v', _) -> pure (Nothing, (a, foldV v'))
       (Right (eid', p'), v', _) -> pure (Just (eid', p', v'), (Nothing, foldV v'))
 
   _ -> pure (Nothing, (Nothing, mempty))
-  where
-    ei' = setNid ei
-
-    setNid (External (_, eid)) = External (nid, eid)
-    setNid (Internal eid) = Internal eid
 
 event :: NodeId -> Application v (Event External a) r
 event nid app = newEvent nid >>= app
@@ -773,6 +782,41 @@ newTrail (Context nid ctx) = do
           (p', u) <- unblockIO m p
           pure (Just (eid, p', v), u)
     }
+
+newTrail'
+  :: Monoid v
+  => NodeId
+  -> Maybe (M.Map EventId EventValue -> IO ())
+  -> (Trail v a -> Syn v a)
+  -> (v -> IO ())
+  -> IO (Trail v a)
+newTrail' nid notify p vcb = mfix $ \trail -> do
+  Context _ ctx <- run nid (p trail)
+  pure $ Trail
+    { trNotify  = \m -> case notify of
+        Just notify' -> notify' m
+        Nothing -> stepAllTrail [m] trail
+    , trAdvance = modifyMVar ctx $ \ctx' -> case ctx' of
+        Nothing -> pure (Nothing, (Nothing, E))
+        Just (eid, p, v) -> do
+          (eid', ios, p', _, v') <- advanceIO nid eid [] p v
+          sequence_ ios
+          vcb (foldV v')
+          case p' of
+            Syn (Pure a) -> pure (Just (eid', p', v'), (Just a, v'))
+            _ -> pure (Just (eid', p', v'), (Nothing, v'))
+    , trGather  = modifyMVar ctx $ \ctx' -> case ctx' of
+        Nothing -> pure (Nothing, M.empty)
+        Just (_, p, _) -> (ctx',) <$> gatherIO p
+    , trUnblock = \m -> modifyMVar ctx $ \ctx' -> case ctx' of
+        Nothing -> pure (Nothing, False)
+        Just (eid, p, v) -> do
+          (p', u) <- unblockIO m p
+          pure (Just (eid, p', v), u)
+    }
+
+runTrail :: Monoid v => Trail v a -> IO ()
+runTrail = stepAllTrail []
 
 --------------------------------------------------------------------------------
 

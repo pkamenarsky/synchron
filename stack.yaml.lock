@@ -18,20 +18,6 @@ packages:
       sha256: 85c575f1e57b795c46c3de9d9e9d8041a1a76f25abc724f4b9008b2234f362bf
   original:
     hackage: list-zipper-0.0.9@sha256:9c5d6120f9a94bfe44c1a6d406fe80bb011a369526d972a720d73eab0aabc900,2413
-- completed:
-    cabal-file:
-      size: 2016
-      sha256: 37fbd822c4b163189e676bd7d7dfcbef24ea3dfc989a66a20352283f4b02b46d
-    name: replica
-    version: 0.1.0.0
-    git: https://github.com/seagreen/replica.git
-    pantry-tree:
-      size: 1319
-      sha256: 02709671bc932e6e5106cb3113b4eb6cd2c232e9cd1b38234c7c6da7d1215833
-    commit: b265e6edc3e9dadb4011628761cd2642c2d4b34c
-  original:
-    git: https://github.com/seagreen/replica.git
-    commit: b265e6edc3e9dadb4011628761cd2642c2d4b34c
 snapshots:
 - completed:
     size: 498155

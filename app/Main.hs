@@ -159,14 +159,14 @@ data Container = Label T.Text | Number Int | Container [ContainerProps] [Contain
 
 toHTML (Label x) = HTML $ \_ -> [VText x]
 toHTML (Number x) = HTML $ \_ -> [VText (T.pack $ show x)]
-toHTML (Container props children) = HTML $ \ctx ->
+toHTML (Container props children) = HTML $ \trail ->
   [ VNode "div"
-      (M.fromList $ fmap (toProps ctx) props)
+      (M.fromList $ fmap (toProps trail) props)
       Nothing
-      (concatMap (($ ctx) . runHTML . toHTML) children)
+      (concatMap (($ trail) . runHTML . toHTML) children)
   ]
   where
-    toProps ctx (Click e) = ("onClick", AEvent $ \de -> void $ push ctx e de)
+    toProps ctx (Click e) = ("onClick", AEvent $ \_ -> undefined)
 
 -- abstractConter :: Event Internal Int -> Int -> Syn Container a
 -- abstractConter o x = local $ \e -> local $ \f -> do
@@ -189,7 +189,7 @@ counter x = do
   counter (x + 1)
 
 testReplica = do
-  runReplica $ local $ \e -> do
+  runReplica' 0 Nothing $ \_ -> local $ \e -> do
     div [ style [("color", "red")], onClick ] [ text "Synchron" ]
     div [ style [("color", "green")], onClick ] [ text "Synchron2" ]
     div [ style [("color", "blue")] ] [ text "Synchron3" ]
@@ -341,8 +341,8 @@ todosingle2 = do
 
 --------------------------------------------------------------------------------
 
-reactText v = loop v $ stream $ \s -> do
-  div [ onClick ] [ text "CLICK ME!!!" ]
+reactText v = loop v $ stream $ \(Last s) -> do
+  div [ onClick ] [ text ("CLICK ME!!!" <> (T.pack $ show s)) ]
   counter 0
   text (T.pack $ show s)
 
@@ -353,7 +353,7 @@ remoteText nid v = do
   newTrail ctx
 
 testRemote = do
-  runReplica $ pool $ \p -> var (Last "") $ \v -> do
+  runReplica' 0 Nothing $ \_ -> pool $ \p -> var (Last "") $ \v -> do
     spawn p (go v)
     spawn p (remote $ remoteText 1 v)
     spawn p (remote $ remoteText 2 v)
@@ -369,6 +369,8 @@ testRemote = do
 
 --------------------------------------------------------------------------------
 
-trail p = runReplica $ svg
+trail p = runReplica' 0 Nothing $ \_ -> svg
   [ width "1000", height "1000", version "1.1", xmlns ]
   [ synSvg' p ]
+
+runRep = runReplica' 0 Nothing . const

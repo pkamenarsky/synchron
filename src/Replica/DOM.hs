@@ -7,12 +7,15 @@
 module Replica.DOM where
 
 import           Control.Applicative      (empty)
+import           Control.Concurrent.Chan
 import           Control.Concurrent       (newEmptyMVar, modifyMVar, newMVar, putMVar, takeMVar)
 import           Control.Monad            (void)
 
 import           Replica.Props            (Props(Props), Prop(PropText, PropBool, PropEvent, PropMap), key)
 
 import           Data.Bifunctor           (second)
+import           Data.IORef
+import           Data.Maybe
 import           Data.Monoid              ((<>))
 import qualified Data.Text                as T
 
@@ -29,31 +32,63 @@ import Network.WebSockets.Connection (defaultConnectionOptions)
 
 import           Syn
 
-newtype HTML = HTML { runHTML :: Context HTML () -> R.HTML }
+newtype HTML = HTML { runHTML :: Trail HTML () -> R.HTML }
   deriving (Semigroup, Monoid)
 
 runReplica :: Syn Replica.DOM.HTML () -> IO ()
-runReplica p = do
-  let nid = NodeId 0
-  ctx   <- newMVar (Just (0, p, E))
-  block <- newMVar ()
-  Warp.run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> do
-    takeMVar block
+runReplica p = undefined -- do
+--   let nid = NodeId 0
+--   ctx   <- newMVar (Just (0, p, E))
+--   block <- newMVar ()
+--   Warp.run 3985 $ Replica.app (defaultIndex "Synchron" []) defaultConnectionOptions Prelude.id () $ \() -> do
+--     takeMVar block
+-- 
+--     modifyMVar ctx $ \ctx' -> case ctx' of
+--       Just (eid, p, v) -> do
+--         r <- stepAll mempty nid eid p v
+--         case r of
+--           (Left _, v', _) -> do
+--             pure (Nothing, Just (runHTML (foldV v') (Context nid ctx), (), \_ -> pure (pure ())))
+--           (Right (eid', p'), v', _) -> do
+--             let html = runHTML (foldV v') (Context nid ctx)
+--             -- putStrLn (BC.unpack $ A.encode html)
+--             pure
+--               ( Just (eid', p', v')
+--               , Just (html, (), \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))
+--               )
+--       Nothing -> pure (Nothing, Nothing)
 
-    modifyMVar ctx $ \ctx' -> case ctx' of
-      Just (eid, p, v) -> do
-        r <- stepAll mempty nid eid p v
-        case r of
-          (Left _, v', _) -> do
-            pure (Nothing, Just (runHTML (foldV v') (Context nid ctx), (), \_ -> pure (pure ())))
-          (Right (eid', p'), v', _) -> do
-            let html = runHTML (foldV v') (Context nid ctx)
-            -- putStrLn (BC.unpack $ A.encode html)
-            pure
-              ( Just (eid', p', v')
-              , Just (html, (), \re -> fmap (>> putMVar block()) $ fireEvent html (Replica.evtPath re) (Replica.evtType re) (DOMEvent $ Replica.evtEvent re))
-              )
-      Nothing -> pure (Nothing, Nothing)
+runReplica'
+  :: NodeId
+  -> Maybe (M.Map EventId EventValue -> IO ())
+  -> (Trail Replica.DOM.HTML () -> Syn Replica.DOM.HTML ())
+  -> IO ()
+runReplica' nid notify p = do
+  Warp.run 3985 $ Replica.app'
+    (defaultIndex "Synchron" [])
+    defaultConnectionOptions
+    Prelude.id
+    spawn
+  where
+    spawn = do
+      ch    <- newChan
+      vvar  <- newIORef Nothing
+      trail <- newTrail' nid notify p (\v -> writeIORef vvar (Just v) >> writeChan ch v)
+      runTrail trail
+
+      pure (
+        (\(HTML html) -> html trail) <$> readChan ch
+        , \re -> do
+            v <- readIORef vvar
+            case v of
+              Nothing -> pure ()
+              Just (HTML html) -> fromMaybe (pure ())
+                $ fireEvent
+                    (html trail)
+                    (Replica.evtPath re)
+                    (Replica.evtType re)
+                    (DOMEvent $ Replica.evtEvent re)
+        )
 
 el' :: Maybe R.Namespace -> T.Text -> [Props a] -> [Syn HTML a] -> Syn HTML a
 el' ns e attrs children = do
@@ -65,11 +100,11 @@ el' ns e attrs children = do
     children' attrs' = case children <> concatMap snd attrs' of
       [] -> empty
       cs -> orr cs
-    toAttr :: Props a -> Syn HTML ((T.Text, Context HTML () -> Attr), [Syn HTML a])
+    toAttr :: Props a -> Syn HTML ((T.Text, Trail HTML () -> Attr), [Syn HTML a])
     toAttr (Props k (PropText v)) = pure ((k, \_ -> AText v), [])
     toAttr (Props k (PropBool v)) = pure ((k, \_ -> ABool v), [])
-    toAttr (Props k (PropEvent extract)) = local $ \e -> do
-      pure ((k, \ctx -> AEvent $ \de -> void $ push ctx e de), [extract <$> await e])
+    toAttr (Props k (PropEvent extract)) = local $ \e@(Event _ eid) -> do
+      pure ((k, \ctx -> AEvent $ \de -> trNotify ctx (M.singleton eid (EventValue e de))), [extract <$> await e])
     toAttr (Props k (PropMap m)) = do
       m' <- mapM toAttr m
       pure ((k, \ctx -> AMap $ M.fromList $ fmap (second ($ ctx) . fst) m'), concatMap snd m')
