@@ -364,19 +364,18 @@ testRemote = do
 
 --------------------------------------------------------------------------------
 
-rrCounter notify = do
+rrCounter = do
   trail <- newTrail 0 (todos)
-  runReplicaTrail notify trail
+  runReplicaTrail trail
 
 serverSide trail = do
   remote trail
 
 everything = do
-  (app, serverTrail) <- mfix $ \(~(app, serverTrail)) -> do
-    (app, trail) <- rrCounter (notify serverTrail)
+  (app, trail) <- rrCounter
+  serverTrail  <- newTrail 1 (serverSide (pure trail))
 
-    serverTrail <- newTrail 1 (serverSide (pure trail))
-    pure (app, serverTrail)
+  runTrail (notify serverTrail) serverTrail
 
   Warp.run 3985 app
   where

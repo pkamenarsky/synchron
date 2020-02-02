@@ -79,17 +79,14 @@ runReplica notify mkTrail = do
         )
 
 runReplicaTrail
-  :: Notify
-  -> Trail Replica.DOM.HTML ()
+  :: Trail Replica.DOM.HTML ()
   -> IO (Network.Wai.Application, Trail Replica.DOM.HTML ())
-runReplicaTrail notify trail' = do
+runReplicaTrail trail' = do
   ch     <- newChan
   vvar   <- newIORef Nothing
 
   let trail = wrapTrail vvar ch trail'
   
-  runTrail notify trail
-
   pure
     ( Replica.app'
         (defaultIndex "Synchron" [])
@@ -134,7 +131,7 @@ el' ns e attrs children = do
     toAttr (Props k (PropText v)) = pure ((k, \_ -> AText v), [])
     toAttr (Props k (PropBool v)) = pure ((k, \_ -> ABool v), [])
     toAttr (Props k (PropEvent extract)) = local $ \e@(Event _ eid) -> do
-      pure ((k, \notify -> AEvent $ \de -> trace "DOMNOTIFY" $ notify (M.singleton eid (EventValue e de))), [extract <$> await e])
+      pure ((k, \notify -> AEvent $ \de -> notify (M.singleton eid (EventValue e de))), [extract <$> await e])
     toAttr (Props k (PropMap m)) = do
       m' <- mapM toAttr m
       pure ((k, \notify -> AMap $ M.fromList $ fmap (second ($ notify) . fst) m'), concatMap snd m')
