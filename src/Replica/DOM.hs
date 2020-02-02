@@ -59,11 +59,10 @@ runReplica p = undefined -- do
 --       Nothing -> pure (Nothing, Nothing)
 
 runReplica'
-  :: NodeId
-  -> Maybe (M.Map EventId EventValue -> IO ())
-  -> (Trail Replica.DOM.HTML () -> Syn Replica.DOM.HTML ())
+  :: Trail Replica.DOM.HTML ()
+  -> IO Replica.DOM.HTML
   -> IO ()
-runReplica' nid notify p = do
+runReplica' trail next = do
   Warp.run 3985 $ Replica.app'
     (defaultIndex "Synchron" [])
     defaultConnectionOptions
@@ -71,13 +70,16 @@ runReplica' nid notify p = do
     spawn
   where
     spawn = do
-      ch    <- newChan
       vvar  <- newIORef Nothing
-      trail <- newTrail' nid notify p (\v -> writeIORef vvar (Just v) >> writeChan ch v)
+      -- trail <- newTrail' nid notify p (\v -> writeIORef vvar (Just v) >> writeChan ch v)
       runTrail trail
 
       pure (
-        (\(HTML html) -> html trail) <$> readChan ch
+        -- (\(HTML html) -> html trail) <$> next
+          do
+            v@(HTML html) <- next
+            writeIORef vvar (Just v)
+            pure (html trail)
         , \re -> do
             v <- readIORef vvar
             case v of

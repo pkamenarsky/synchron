@@ -14,7 +14,7 @@ module Syn where
 
 import Control.Applicative
 import Control.Concurrent
-import Control.Monad.Fix (mfix)
+import Control.Monad.Fix (fix, mfix)
 import Control.Monad.Fail
 import Control.Monad.Free
 
@@ -783,37 +783,40 @@ newTrail (Context nid ctx) = do
           pure (Just (eid, p', v), u)
     }
 
+-- TODO: return BroadcastChan v, not IO v
 newTrail'
   :: Monoid v
   => NodeId
   -> Maybe (M.Map EventId EventValue -> IO ())
-  -> (Trail v a -> Syn v a)
-  -> (v -> IO ())
-  -> IO (Trail v a)
-newTrail' nid notify p vcb = mfix $ \trail -> do
-  Context _ ctx <- run nid (p trail)
-  pure $ Trail
-    { trNotify  = \m -> case notify of
-        Just notify' -> notify' m
-        Nothing -> stepAllTrail [m] trail
-    , trAdvance = modifyMVar ctx $ \ctx' -> case ctx' of
-        Nothing -> pure (Nothing, (Nothing, E))
-        Just (eid, p, v) -> do
-          (eid', ios, p', _, v') <- advanceIO nid eid [] p v
-          sequence_ ios
-          vcb (foldV v')
-          case p' of
-            Syn (Pure a) -> pure (Just (eid', p', v'), (Just a, v'))
-            _ -> pure (Just (eid', p', v'), (Nothing, v'))
-    , trGather  = modifyMVar ctx $ \ctx' -> case ctx' of
-        Nothing -> pure (Nothing, M.empty)
-        Just (_, p, _) -> (ctx',) <$> gatherIO p
-    , trUnblock = \m -> modifyMVar ctx $ \ctx' -> case ctx' of
-        Nothing -> pure (Nothing, False)
-        Just (eid, p, v) -> do
-          (p', u) <- unblockIO m p
-          pure (Just (eid, p', v), u)
-    }
+  -> Syn v a
+  -> IO (Trail v a, IO v)
+newTrail' nid notify p = do
+  ch <- newChan
+  Context _ ctx <- run nid p
+  pure $ (, readChan ch) $
+    ( fix $ \trail -> Trail
+        { trNotify  = \m -> case notify of
+            Just notify' -> notify' m
+            Nothing -> stepAllTrail [m] trail
+        , trAdvance = modifyMVar ctx $ \ctx' -> case ctx' of
+            Nothing -> pure (Nothing, (Nothing, E))
+            Just (eid, p, v) -> do
+              (eid', ios, p', _, v') <- advanceIO nid eid [] p v
+              sequence_ ios
+              writeChan ch (foldV v')
+              case p' of
+                Syn (Pure a) -> pure (Just (eid', p', v'), (Just a, v'))
+                _ -> pure (Just (eid', p', v'), (Nothing, v'))
+        , trGather  = modifyMVar ctx $ \ctx' -> case ctx' of
+            Nothing -> pure (Nothing, M.empty)
+            Just (_, p, _) -> (ctx',) <$> gatherIO p
+        , trUnblock = \m -> modifyMVar ctx $ \ctx' -> case ctx' of
+            Nothing -> pure (Nothing, False)
+            Just (eid, p, v) -> do
+              (p', u) <- unblockIO m p
+              pure (Just (eid, p', v), u)
+        }
+    )
 
 runTrail :: Monoid v => Trail v a -> IO ()
 runTrail = stepAllTrail []
