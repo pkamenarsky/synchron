@@ -787,15 +787,14 @@ newTrail'
   :: Monoid v
   => NodeId
   -> Maybe (M.Map EventId EventValue -> IO ())
-  -> (Trail v a -> Syn v a)
-  -> (v -> IO ())
-  -> IO (Trail v a)
-newTrail' nid notify p vcb = mfix $ \trail -> do
-  Context _ ctx <- run nid (p trail)
-  pure $ Trail
+  -> Syn v a
+  -> IO ((v -> IO ()) -> Trail v a)
+newTrail' nid notify p = mfix $ \trail -> do
+  Context _ ctx <- run nid p
+  pure $ \vcb -> Trail
     { trNotify  = \m -> case notify of
         Just notify' -> notify' m
-        Nothing -> stepAllTrail [m] trail
+        Nothing -> stepAllTrail [m] (trail vcb)
     , trAdvance = modifyMVar ctx $ \ctx' -> case ctx' of
         Nothing -> pure (Nothing, (Nothing, E))
         Just (eid, p, v) -> do
