@@ -8,7 +8,7 @@ module Replica.DOM where
 
 import           Control.Applicative      (empty)
 import           Control.Concurrent.Chan
-import           Control.Concurrent       (newEmptyMVar, modifyMVar, newMVar, putMVar, takeMVar)
+import           Control.Concurrent       (forkIO, newEmptyMVar, modifyMVar, newMVar, putMVar, takeMVar)
 import           Control.Monad            (void)
 import           Control.Monad.Fix        (fix)
 
@@ -36,10 +36,8 @@ import           Syn
 newtype HTML = HTML { runHTML :: Trail HTML () -> R.HTML }
   deriving (Semigroup, Monoid)
 
-runReplica
-  :: Trail Replica.DOM.HTML ()
-  -> IO ()
-runReplica trail' = do
+runReplica :: IO (Trail Replica.DOM.HTML ()) -> IO ()
+runReplica mkTrail = do
   Warp.run 3985 $ Replica.app'
     (defaultIndex "Synchron" [])
     defaultConnectionOptions
@@ -56,15 +54,16 @@ runReplica trail' = do
       }
 
     spawn = do
-      ch    <- newChan
-      vvar  <- newIORef Nothing
+      ch     <- newChan
+      vvar   <- newIORef Nothing
+      trail' <- mkTrail
 
       let trail = wrapTrail vvar ch trail'
       
       runTrail trail
 
-      pure (
-        (\(HTML html) -> html trail) <$> readChan ch
+      pure
+        ( (\(HTML html) -> html trail) <$> readChan ch
         , \re -> do
             v <- readIORef vvar
             case v of
@@ -76,6 +75,43 @@ runReplica trail' = do
                     (Replica.evtType re)
                     (DOMEvent $ Replica.evtEvent re)
         )
+
+runReplicaTrail :: Trail Replica.DOM.HTML () -> IO (Trail Replica.DOM.HTML ())
+runReplicaTrail trail' = do
+  ch     <- newChan
+  vvar   <- newIORef Nothing
+
+  let trail = wrapTrail vvar ch trail'
+  
+  runTrail trail
+
+  forkIO $ Warp.run 3985 $ Replica.app'
+    (defaultIndex "Synchron" [])
+    defaultConnectionOptions
+    Prelude.id $ pure
+    ( (\(HTML html) -> html trail) <$> readChan ch
+    , \re -> do
+        v <- readIORef vvar
+        case v of
+          Nothing -> pure ()
+          Just (HTML html) -> fromMaybe (pure ())
+            $ fireEvent
+                (html trail)
+                (Replica.evtPath re)
+                (Replica.evtType re)
+                (DOMEvent $ Replica.evtEvent re)
+    )
+
+  pure trail
+  where
+    wrapTrail vvar ch trail = trail
+      { trAdvance = do
+          (a, v) <- trAdvance trail
+          let html = foldV v
+          writeIORef vvar (Just html)
+          writeChan ch html
+          pure (a, v)
+      }
 
 el' :: Maybe R.Namespace -> T.Text -> [Props a] -> [Syn HTML a] -> Syn HTML a
 el' ns e attrs children = do

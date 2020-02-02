@@ -368,5 +368,4 @@ trail p = runRep $ svg
   [ synSvg' p ]
 
 runRep p = do
-  trail <- newTrail 0 Nothing p
-  runReplica trail
+  runReplica (newTrail 0 Nothing p)
