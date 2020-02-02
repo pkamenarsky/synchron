@@ -63,7 +63,7 @@ data Trail v a = Trail
   }
 
 data SynF v next
-  = Async (IO ()) next
+  = Async (Notify -> IO ()) next
 
   | Forever
 
@@ -134,7 +134,7 @@ mapView f m = Syn $ liftF (MapView f m id)
 remote :: IO (Trail v a) -> Syn v a
 remote trail = Syn $ liftF (Remote trail id)
 
-async :: IO () -> Syn v ()
+async :: (Notify -> IO ()) -> Syn v ()
 async io = Syn $ liftF (Async io ())
 
 forever :: Syn v a
@@ -386,7 +386,7 @@ advance nid eid ios rsp@(Syn (Free (Emit (EventValue (Event _ e) _) _))) v
 
 -- async
 advance nid eid ios (Syn (Free (Async io next))) v
-  = advance nid eid (io:ios) (Syn next) v
+  = advance nid eid (io undefined:ios) (Syn next) v
 
 -- and
 advance nid eid ios rsp@(Syn (Free (And p q next))) v
@@ -522,7 +522,7 @@ advanceIO nid eid ios notify rsp@(Syn (Free (Emit (EventValue (Event _ e) _) _))
 
 -- async
 advanceIO nid eid ios notify (Syn (Free (Async io next))) v
-  = advanceIO nid eid (io:ios) notify (Syn next) v
+  = advanceIO nid eid (io notify:ios) notify (Syn next) v
 
 -- and
 advanceIO nid eid ios notify rsp@(Syn (Free (And p q next))) v = do

@@ -92,6 +92,6 @@ receive :: WebSocket -> Syn.Syn v DataMessage
 receive (WebSocket e _) = Syn.await e
 
 send :: WebSocket -> DataMessage -> Syn.Syn v ()
-send (WebSocket _ v) m = Syn.async $ atomically $ do
+send (WebSocket _ v) m = Syn.async $ \_ -> atomically $ do
   outCh <- readTVar v
   writeTChan outCh m

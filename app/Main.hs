@@ -13,6 +13,7 @@ import Control.Monad (forever)
 
 import qualified Data.Aeson as A
 import qualified Data.ByteString.Lazy.Char8 as BC
+import           Data.IORef
 import qualified Data.Map as M
 import qualified Data.Text as T
 import           Data.Semigroup (Last (..))
@@ -238,7 +239,7 @@ shared = local $ \end -> local $ \st -> pool $ \p -> do
 
     get st = do
       a <- await st
-      async (print a)
+      async (const $ print a)
       get st
 
 background = div
@@ -364,22 +365,71 @@ testRemote = do
 
 --------------------------------------------------------------------------------
 
-rrCounter = do
-  trail <- newTrail 0 (todos)
+asyncR :: IO b -> Syn v b
+asyncR f = local $ \e@(Event _ eid) -> do
+  async $ \notify -> do
+    a <- f
+    void $ forkIO $ notify (M.singleton eid (EventValue e a))
+  await e
+
+rrCounter nid v = do
+  trail <- newTrail nid $ loop v (go v 0)
   runReplicaTrail trail
+  where
+    go v y = stream $ \(Last x) -> do
+      div [ onClick ] [ text (T.pack $ show (x, y)) ]
+      putVar v (Last (y + 1))
+      pure (Right (go v (y + 1)))
 
-serverSide trail = do
-  remote trail
+rrClient port = do
+  -- (app, trail) <- rrCounter 0 undefined
+  -- (app2, trail2) <- rrCounter 1 undefined
 
-everything = do
-  (app, trail) <- rrCounter
-  serverTrail  <- newTrail 1 (serverSide (pure trail))
+  vapp  <- newChan
+  vapp2 <- newChan
+
+  serverTrail <- newTrail 2 $ var (Last 0) $ \v -> do
+    async $ \_ -> print "YEYEAH"
+    (app, trail) <- asyncR (rrCounter 0 v)
+    (app2, trail2) <- asyncR (rrCounter 1 v)
+
+    async $ \_ -> do
+      writeChan vapp app
+      writeChan vapp2 app2
+
+    remote (pure trail <|> pure trail2)
 
   runTrail (notify serverTrail) serverTrail
 
-  Warp.run 3985 app
+  app <- readChan vapp
+  app2 <- readChan vapp2
+
+  Warp.run port app
   where
     notify trail e = stepAllTrail [e] (notify trail) trail
+
+loopCounter :: Var (Last Int) -> Syn Replica.DOM.HTML a
+loopCounter v = loop v (go v)
+  where
+    go v = stream $ \(Last x) -> do
+      div [ onClick ] [ text (T.pack $ show x) ]
+      putVar v (Last (x + 1))
+      pure (Right (go v))
+
+twoLoopCounters = var (Last 0) $ \v -> loopCounter v <|> loopCounter v
+
+--------------------------------------------------------------------------------
+
+recv :: Syn v a
+recv = undefined
+
+send :: a -> Syn v ()
+send = undefined
+
+serveEmbeddedReplica nid server p = do
+  trail <- newTrail nid p
+  (app, appTrail) <- runReplicaTrail trail
+  undefined
 
 --------------------------------------------------------------------------------
 
@@ -388,4 +438,8 @@ trail p = runRep $ svg
   [ synSvg' p ]
 
 runRep p = do
-  runReplica (\_ -> pure ()) (newTrail 0 p)
+  trail <- newTrail 0 p
+  runReplica (notify trail) (pure trail)
+
+  where
+    notify trail e = stepAllTrail [e] (notify trail) trail
