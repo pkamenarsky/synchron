@@ -189,7 +189,7 @@ counter x = do
   counter (x + 1)
 
 testReplica = do
-  runReplica' 0 Nothing $ \_ -> local $ \e -> do
+  runReplica' 0 Nothing $ local $ \e -> do
     div [ style [("color", "red")], onClick ] [ text "Synchron" ]
     div [ style [("color", "green")], onClick ] [ text "Synchron2" ]
     div [ style [("color", "blue")] ] [ text "Synchron3" ]
@@ -353,7 +353,7 @@ remoteText nid v = do
   newTrail ctx
 
 testRemote = do
-  runReplica' 0 Nothing $ \_ -> pool $ \p -> var (Last "") $ \v -> do
+  runReplica' 0 Nothing $ pool $ \p -> var (Last "") $ \v -> do
     spawn p (go v)
     spawn p (remote $ remoteText 1 v)
     spawn p (remote $ remoteText 2 v)
@@ -369,8 +369,10 @@ testRemote = do
 
 --------------------------------------------------------------------------------
 
-trail p = runReplica' 0 Nothing $ \_ -> svg
+trail p = runReplica' 0 Nothing $ svg
   [ width "1000", height "1000", version "1.1", xmlns ]
   [ synSvg' p ]
 
-runRep = runReplica' 0 Nothing . const
+runRep p = do
+  trail <- newTrail' 0 Nothing p
+  runReplicaTrail trail

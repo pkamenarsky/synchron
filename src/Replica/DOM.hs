@@ -10,6 +10,7 @@ import           Control.Applicative      (empty)
 import           Control.Concurrent.Chan
 import           Control.Concurrent       (newEmptyMVar, modifyMVar, newMVar, putMVar, takeMVar)
 import           Control.Monad            (void)
+import           Control.Monad.Fix        (fix)
 
 import           Replica.Props            (Props(Props), Prop(PropText, PropBool, PropEvent, PropMap), key)
 
@@ -61,7 +62,7 @@ runReplica p = undefined -- do
 runReplica'
   :: NodeId
   -> Maybe (M.Map EventId EventValue -> IO ())
-  -> (Trail Replica.DOM.HTML () -> Syn Replica.DOM.HTML ())
+  -> Syn Replica.DOM.HTML ()
   -> IO ()
 runReplica' nid notify p = do
   Warp.run 3985 $ Replica.app'
@@ -70,10 +71,63 @@ runReplica' nid notify p = do
     Prelude.id
     spawn
   where
+    wrapTrail vvar ch trail = trail
+      { trAdvance = do
+          (a, v) <- trAdvance trail
+          let html = foldV v
+          writeIORef vvar (Just html)
+          writeChan ch html
+          pure (a, v)
+      }
+
+    spawn = do
+      ch     <- newChan
+      vvar   <- newIORef Nothing
+      trail' <- newTrail' nid notify p
+
+      let trail = wrapTrail vvar ch trail'
+
+      runTrail trail
+
+      pure (
+        (\(HTML html) -> html trail) <$> readChan ch
+        , \re -> do
+            v <- readIORef vvar
+            case v of
+              Nothing -> pure ()
+              Just (HTML html) -> fromMaybe (pure ())
+                $ fireEvent
+                    (html trail)
+                    (Replica.evtPath re)
+                    (Replica.evtType re)
+                    (DOMEvent $ Replica.evtEvent re)
+        )
+
+runReplicaTrail
+  :: Trail Replica.DOM.HTML ()
+  -> IO ()
+runReplicaTrail trail' = do
+  Warp.run 3985 $ Replica.app'
+    (defaultIndex "Synchron" [])
+    defaultConnectionOptions
+    Prelude.id
+    spawn
+  where
+    wrapTrail vvar ch trail = trail
+      { trAdvance = do
+          (a, v) <- trAdvance trail
+          let html = foldV v
+          writeIORef vvar (Just html)
+          writeChan ch html
+          pure (a, v)
+      }
+
     spawn = do
       ch    <- newChan
       vvar  <- newIORef Nothing
-      trail <- newTrail' nid notify p (\v -> writeIORef vvar (Just v) >> writeChan ch v)
+
+      let trail = wrapTrail vvar ch trail'
+      
       runTrail trail
 
       pure (
@@ -104,7 +158,7 @@ el' ns e attrs children = do
     toAttr (Props k (PropText v)) = pure ((k, \_ -> AText v), [])
     toAttr (Props k (PropBool v)) = pure ((k, \_ -> ABool v), [])
     toAttr (Props k (PropEvent extract)) = local $ \e@(Event _ eid) -> do
-      pure ((k, \ctx -> AEvent $ \de -> trNotify ctx (M.singleton eid (EventValue e de))), [extract <$> await e])
+      pure ((k, \ctx -> AEvent $ \de -> notify ctx (M.singleton eid (EventValue e de))), [extract <$> await e])
     toAttr (Props k (PropMap m)) = do
       m' <- mapM toAttr m
       pure ((k, \ctx -> AMap $ M.fromList $ fmap (second ($ ctx) . fst) m'), concatMap snd m')

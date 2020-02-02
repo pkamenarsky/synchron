@@ -14,7 +14,7 @@ module Syn where
 
 import Control.Applicative
 import Control.Concurrent
-import Control.Monad.Fix (mfix)
+import Control.Monad.Fix (fix)
 import Control.Monad.Fail
 import Control.Monad.Free
 
@@ -55,7 +55,7 @@ instance Show EventValue where
   show (EventValue e _) = show e
 
 data Trail v a = Trail
-  { trNotify  :: M.Map EventId EventValue -> IO ()
+  { trNotify  :: Maybe (M.Map EventId EventValue -> IO ())
   , trAdvance :: IO (Maybe a, V v)
   , trGather  :: IO (M.Map EventId EventValue)
   , trUnblock :: M.Map EventId EventValue -> IO Bool
@@ -787,21 +787,17 @@ newTrail'
   :: Monoid v
   => NodeId
   -> Maybe (M.Map EventId EventValue -> IO ())
-  -> (Trail v a -> Syn v a)
-  -> (v -> IO ())
+  -> Syn v a
   -> IO (Trail v a)
-newTrail' nid notify p vcb = mfix $ \trail -> do
-  Context _ ctx <- run nid (p trail)
+newTrail' nid notify p = do
+  Context _ ctx <- run nid p
   pure $ Trail
-    { trNotify  = \m -> case notify of
-        Just notify' -> notify' m
-        Nothing -> stepAllTrail [m] trail
+    { trNotify  = notify
     , trAdvance = modifyMVar ctx $ \ctx' -> case ctx' of
         Nothing -> pure (Nothing, (Nothing, E))
         Just (eid, p, v) -> do
           (eid', ios, p', _, v') <- advanceIO nid eid [] p v
           sequence_ ios
-          vcb (foldV v')
           case p' of
             Syn (Pure a) -> pure (Just (eid', p', v'), (Just a, v'))
             _ -> pure (Just (eid', p', v'), (Nothing, v'))
@@ -814,6 +810,11 @@ newTrail' nid notify p vcb = mfix $ \trail -> do
           (p', u) <- unblockIO m p
           pure (Just (eid, p', v), u)
     }
+
+notify :: Monoid v => Trail v a -> M.Map EventId EventValue -> IO ()
+notify trail m = case trNotify trail of
+  Nothing -> stepAllTrail [m] trail
+  Just notify' -> notify' m
 
 runTrail :: Monoid v => Trail v a -> IO ()
 runTrail = stepAllTrail []
