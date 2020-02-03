@@ -60,7 +60,7 @@ loop v@(Var e) f = do
     
   where
     go f a e = do
-      r <- orr [ Left <$> runStream f a, Right <$> await e ]
+      r <- orr [ Right <$> await e, Left <$> runStream f a ]
       case r of
         Left (Left a) -> pure a
         Left (Right f') -> go f' a e
