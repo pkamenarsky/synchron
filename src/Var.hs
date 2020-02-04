@@ -79,3 +79,36 @@ testVars = var (Last 5) $ \v -> do
   b <- readVar v
   (_, c) <- andd (putVar v (Last 11), readVar v)
   pure (a, b, c)
+
+--------------------------------------------------------------------------------
+
+reflect :: Syn u x -> (u -> Syn v a) -> Syn v a
+reflect = undefined
+
+reflect' :: Syn u x -> Stream u v a -> Syn v a
+reflect' = undefined
+
+refract :: Event Internal u -> Syn (u, v) a -> Syn v a
+refract e p = reflect p $ \(u, v) -> emit e u >> view v >> forever
+
+reflrefr :: Monoid v => Syn (u, v) x -> (u -> Syn v x) -> Syn v x
+reflrefr p f = reflect p $ \(u, v) -> orr [f u, view v >> forever]
+
+data DOM
+
+instance Semigroup DOM
+instance Monoid DOM
+
+inputWithState :: Syn (String, DOM) x
+inputWithState = undefined
+
+searchResults :: Event Internal String -> Syn [String] x
+searchResults = undefined
+
+searchResults' :: String -> Syn [String] x
+searchResults' = undefined
+
+ie = local $ \i -> orr
+  [ refract i inputWithState
+  , reflect (searchResults i) $ \results -> undefined -- results :: [String]
+  ]
