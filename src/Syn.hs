@@ -78,6 +78,8 @@ data SynF v next
   | Emit EventValue next
   | forall t a. Await (Event t a) (a -> next)
 
+  | forall t a. Reflect (v -> Maybe a -> IO ()) (Syn v a) (a -> next)
+
   | forall a b. Dyn (Event Internal [Syn v ()]) (Syn v b) [(Syn v (), V v)] (b -> next)
 
   | forall a. Or (Syn v a) (Syn v a) (a -> next)
@@ -725,8 +727,14 @@ pool :: Monoid v => (Pool v -> Syn v a) -> Syn v a
 pool f = local' (<>) $ \e -> Syn (liftF (Dyn e (f (Pool e)) [] id))
 
 spawn :: Pool v -> Syn v () -> Syn v ()
-spawn (Pool e) p = do
-  emit e [p]
+spawn (Pool e) p = emit e [p]
+
+data Connection = Connection
+  { connNotify :: M.Map EventId EventValue
+  }
+
+share :: Connection -> Pool v -> Syn v () -> Syn v ()
+share = undefined
 
 --------------------------------------------------------------------------------
 

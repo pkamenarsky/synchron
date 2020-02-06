@@ -420,6 +420,11 @@ twoLoopCounters = var (Last 0) $ \v -> loopCounter v <|> loopCounter v
 
 --------------------------------------------------------------------------------
 
+request :: (Var a -> Syn u ()) -> Var a -> (u -> Syn v c) -> Syn v c
+request = undefined
+
+--------------------------------------------------------------------------------
+
 recv :: Syn v a
 recv = undefined
 
@@ -443,3 +448,13 @@ runRep p = do
 
   where
     notify trail e = stepAllTrail [e] (notify trail) trail
+
+--------------------------------------------------------------------------------
+
+room msgs = do
+  msg <- div [] $ mconcat
+    [ flip map msgs $ \msg -> span [] [ text msg ]
+    , [ inputOnEnter "" ""
+      ]
+    ]
+  room (msg:msgs)

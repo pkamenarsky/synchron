@@ -62,3 +62,10 @@ testCut = cut
   , (1, (S.fromList [3], S.fromList [1]))
   , (2, (S.fromList [], S.fromList [3]))
   ]
+
+--------------------------------------------------------------------------------
+
+type SynRun v a = [(Frame, Syn v a, Map EventId EventValue)]
+
+bla :: [(Frame, v, Map EventId EventValue)] -> SynRun v a -> SynRun v a
+bla upstream run = undefined
