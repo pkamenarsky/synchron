@@ -372,3 +372,13 @@ testRemote = do
 trail p = runReplica $ svg
   [ width "1000", height "1000", version "1.1", xmlns ]
   [ synSvg' p ]
+
+
+--------------------------------------------------------------------------------
+
+room msgs = do
+  msg <- div [] $ mconcat
+    [ [ inputOnEnter "" "" ]
+    , flip map msgs $ \msg -> div [] [ text msg ]
+    ]
+  room (msg:msgs)

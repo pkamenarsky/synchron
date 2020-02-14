@@ -77,6 +77,8 @@ data SynF v next
   | Emit EventValue next
   | forall t a. Await (Event t a) (a -> next)
 
+  | forall a. Reify (Event Internal (Syn v a, v)) (Syn v a) next
+
   | forall a b. Dyn (Event Internal [Syn v ()]) (Syn v b) [(Syn v (), V v)] (b -> next)
 
   | forall a. Or (Syn v a) (Syn v a) (a -> next)
@@ -156,6 +158,9 @@ emitValue (EventValue e a) = Syn $ liftF (Emit (EventValue e a) ())
 
 await :: Event t a -> Syn v a
 await e = Syn $ liftF (Await e id)
+
+reify :: Event Internal (Syn v a, v) -> Syn v a -> Syn v a
+reify = undefined
 
 -- | Left biased.
 orr :: Monoid v => [Syn v a] -> Syn v a
