@@ -28,6 +28,7 @@ dependencies:
 - containers
 - comonad
 - free
+- hashtables
 - http-types
 - list-zipper
 - transformers

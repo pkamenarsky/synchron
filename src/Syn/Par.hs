@@ -16,12 +16,14 @@ module Syn.Par where
 
 import Control.Monad.Free
 import Control.Concurrent
+import qualified Data.Map as M
 
 import Data.IORef
+import qualified Data.HashTable.IO as H
 
 import Unsafe.Coerce (unsafeCoerce)
 
-data EventId
+data EventId = Int
 data Event a = Event EventId
 data EventValue = forall a. Monoid a => EventValue (Event a) a
 
@@ -47,6 +49,41 @@ deriving instance Functor (SynF v)
 
 newtype Syn v a = Syn { getSyn :: Free (SynF v) a }
   deriving (Functor, Applicative, Monad)
+
+--------------------------------------------------------------------------------
+
+type Frame = Int
+
+data FrameTable = FrameTable
+  { ftSize :: IORef Int
+  , ftAck :: IORef Int
+  , ftTable :: H.BasicHashTable EventId EventValue
+  }
+
+type EventTable = H.BasicHashTable Frame FrameTable
+
+expect :: EventTable -> Frame -> Int -> IO ()
+expect t frame add = H.mutateIO t frame $ \v -> case v of
+  Nothing -> do
+    fts <- newIORef add
+    fta <- newIORef 0
+    ftt <- H.new
+    pure (Just $ FrameTable fts fta ftt, ())
+  Just ft@(FrameTable fts _ _) -> do
+    atomicModifyIORef' fts $ \s -> (s + add, ())
+    pure (Just ft, ())
+
+ack :: EventTable -> Frame -> IO ()
+ack t frame = H.mutateIO t frame $ \v -> case v of
+  Nothing -> error "ack"
+  Just (FrameTable fts fta ftt)  -> do
+    undefined
+
+emit :: EventTable -> Frame -> Event a -> a -> IO ()
+emit t frame e a = undefined
+
+await :: EventTable -> Frame -> Event a -> IO a
+await = undefined
 
 --------------------------------------------------------------------------------
 
