@@ -30,9 +30,9 @@ example = local $ \e -> do              ➊
 
 `andd` is overloaded for tuples of arity up to 6, yielding tuples of the same arity in the `Syn` monad. This allows for trails with differing types, in contrast to `orr` (alternatively, `andd'` takes a monomorphic list if that is desired).
 
-*TODO* Talk about state machine in data vs code; "reification of time"; "reinversion of control"
+*TODO* State machine in data vs code; "reification of time"; "reinversion of control"
 
-*TODO* Talk about interesting and unexplored applications of synchronous programming
+*TODO* Interesting and unexplored applications of synchronous programming
 
 *TODO* Contrast with FRP
 
