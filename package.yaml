@@ -22,24 +22,14 @@ description:         Please see the README on GitHub at <https://github.com/gith
 dependencies:
 - base >= 4.7 && < 5
 - aeson
-- amqp
-- async
 - bytestring
 - containers
-- comonad
 - free
 - hashtables
-- http-types
-- list-zipper
 - transformers
-- replica
 - stm
 - svg-builder
 - text
-- wai
-- wai-websockets
-- warp
-- websockets
 
 library:
   source-dirs: src

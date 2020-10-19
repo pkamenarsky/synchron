@@ -54,13 +54,6 @@ data EventValue = forall t a. EventValue (Event t a) a
 instance Show EventValue where
   show (EventValue e _) = show e
 
-data Trail v a = Trail
-  { trNotify  :: M.Map EventId EventValue -> IO ()
-  , trAdvance :: IO (Maybe a, V v)
-  , trGather  :: IO (M.Map EventId EventValue)
-  , trUnblock :: M.Map EventId EventValue -> IO Bool
-  }
-
 data SynF v next
   = Async (IO ()) next
 
@@ -70,16 +63,9 @@ data SynF v next
 
   | forall u a. Monoid u => MapView (u -> v) (Syn u a) (a -> next)
 
-  | forall a. Remote (IO (Trail v a)) (a -> next)
-  | forall a. RemoteU (Trail v a) (a -> next)
-
   | forall a b. Local (a -> a -> a) (Event Internal a -> Syn v b) (b -> next)
   | Emit EventValue next
   | forall t a. Await (Event t a) (a -> next)
-
-  | forall a. Reify (Event Internal (Syn v a, v)) (Syn v a) next
-
-  | forall a b. Dyn (Event Internal [Syn v ()]) (Syn v b) [(Syn v (), V v)] (b -> next)
 
   | forall a. Or (Syn v a) (Syn v a) (a -> next)
   | forall a b. And (Syn v a) (Syn v b) ((a, b) -> next)
@@ -107,10 +93,7 @@ instance Show (Syn v a) where
   show (Syn (Pure a)) = "◆"
   show (Syn (Free (Async e _))) = "A"
   show (Syn (Free Forever)) = "∞"
-  show (Syn (Free (Dyn _ p ps _))) = "dyn (" <> show p <> ") [" <> intercalate ", " (map (show . fst) ps) <> "]"
   show (Syn (Free (MapView _ m _))) = "fmap (" <> show m <> ")"
-  show (Syn (Free (Remote _ _))) = "remote"
-  show (Syn (Free (RemoteU _ _))) = "remote"
   show (Syn (Free (View _ _))) = "V"
   show (Syn (Free (Local _ _ _))) = "local"
   show (Syn (Free (Emit (EventValue (Event _ e) _) _))) = evColor e "▲"
@@ -131,9 +114,6 @@ data DbgSyn
 
 mapView :: Monoid u => (u -> v) -> Syn u a -> Syn v a
 mapView f m = Syn $ liftF (MapView f m id)
-
-remote :: IO (Trail v a) -> Syn v a
-remote trail = Syn $ liftF (Remote trail id)
 
 async :: IO () -> Syn v ()
 async io = Syn $ liftF (Async io ())
@@ -231,18 +211,6 @@ unblock m rsp@(Syn (Free (Await (Event _ eid') next)))
       Just (EventValue _ a) -> (Syn (next $ unsafeCoerce a), True)
       Nothing -> (rsp, False)
 
--- dyn
--- TODO: should new trail be unblocked by current cycle as well? answer: NO (i.e. an emit won't have been evaluated)
-unblock m rsp@(Syn (Free (Dyn e@(Event _ eid') p ps next)))
-  = (Syn (Free (Dyn e p' (zip (map fst ps') (map snd ps) <> map (,E) newPs) next)), u || or (map snd ps'))
-  where
-    newPs = case M.lookup eid' m of
-              Just (EventValue _ ps) -> unsafeCoerce ps
-              Nothing -> []
-
-    (p', u) = unblock m p
-    ps' = map (unblock m) (map fst ps)
-
 -- emit
 unblock m rsp@(Syn (Free (Emit _ next))) = (Syn next, True)
 
@@ -265,11 +233,6 @@ unblockIO
   -> Syn v a
   -> IO (Syn v a, Bool)
 
--- remote
-unblockIO m rsp@(Syn (Free (RemoteU trail next))) = do
-  u <- trUnblock trail m
-  pure (rsp, u)
-
 -- pure
 unblockIO _ rsp@(Syn (Pure a)) = pure (rsp, False)
 
@@ -289,17 +252,6 @@ unblockIO m rsp@(Syn (Free (Await (Event _ eid') next)))
   = case M.lookup eid' m of
       Just (EventValue _ a) -> pure (Syn (next $ unsafeCoerce a), True)
       Nothing -> pure (rsp, False)
-
--- dyn
--- TODO: should new trail be unblockIOed by current cycle as well? answer: NO (i.e. an emit won't have been evaluated)
-unblockIO m rsp@(Syn (Free (Dyn e@(Event _ eid') p ps next))) = do
-  (p', u) <- unblockIO m p
-  ps' <- traverse (unblockIO m) (map fst ps)
-  pure (Syn (Free (Dyn e p' (zip (map fst ps') (map snd ps) <> map (,E) newPs) next)), u || or (map snd ps'))
-  where
-    newPs = case M.lookup eid' m of
-              Just (EventValue _ ps) -> unsafeCoerce ps
-              Nothing -> []
 
 -- emit
 unblockIO m rsp@(Syn (Free (Emit _ next))) = pure (Syn next, True)
@@ -368,26 +320,6 @@ advance nid eid ios rsp@(Syn (Free (MapView f m next))) v
 -- local
 advance nid eid ios (Syn (Free (Local conc f next))) v
   = advance nid (eid + 1) ios (f (Event conc (Internal (nid, eid))) >>= Syn . next) v
-
--- dyn
-advance nid eid ios (Syn (Free (Dyn e p ps next))) v
-  = case p' of
-      Syn (Pure a) -> advance nid eid' ios' (Syn (next a)) $ case v' of
-        P pv _ -> pv
-        v' -> v'
-      otherwise -> (eid'', ios'', Syn (Free (Dyn e p' ps' next)), \_ -> DbgDone, v'') -- TODO: DbgDone
-  where
-    pv = case v of
-      E -> E
-      P pv _ -> pv
-
-    (eid', ios', p', dbg', v') = advance nid eid ios p pv
-    (eid'', ios'', ps', dbg'', v'') = go [] eid' ios' ps
-
-    go rps eid ios [] = (eid, ios, map fst (reverse rps), \_ -> DbgDone, P v' (V $ foldMap foldV (map (snd . fst) (reverse rps))))
-    go rps eid ios ((p, v):ps) = case advance nid eid ios p v of
-      (eid', ios', Syn (Pure a), dbg', v') -> go rps eid' ios' ps
-      (eid', ios', p', dbg', v') -> go (((p', v'), dbg'):rps) eid' ios' ps
 
 -- emit
 advance nid eid ios rsp@(Syn (Free (Emit (EventValue (Event _ e) _) _))) v
@@ -458,18 +390,6 @@ advanceIO
   -> V v
   -> IO (Int, [IO ()], Syn v a, DbgSyn -> DbgSyn, V v)
 
--- remote
-advanceIO nid eid ios (Syn (Free (Remote make next))) v = do
-  trail <- make
-  advanceIO nid eid ios (Syn (Free (RemoteU trail next))) v
-
--- remoteU
-advanceIO nid eid ios rsp@(Syn (Free (RemoteU trail next))) _ = do
-  r <- trAdvance trail
-  case r of
-    (Just a, v') -> advanceIO nid eid ios (Syn $ next a) v'
-    (Nothing, v') -> pure (eid, ios, rsp, id, v')
-
 -- pure
 advanceIO nid eid ios rsp@(Syn (Pure a)) v
   = pure (eid, ios, rsp, \_ -> DbgDone, v)
@@ -500,29 +420,6 @@ advanceIO nid eid ios rsp@(Syn (Free (MapView f m next))) v = do
 -- local
 advanceIO nid eid ios (Syn (Free (Local conc f next))) v
   = advanceIO nid (eid + 1) ios (f (Event conc (Internal (nid, eid))) >>= Syn . next) v
-
--- dyn
-advanceIO nid eid ios (Syn (Free (Dyn e p ps next))) v = do
-  let pv = case v of
-        E -> E
-        P pv _ -> pv
-  
-  (eid', ios', p', dbg', v') <- advanceIO nid eid ios p pv
-
-  let go rps eid ios [] = pure (eid, ios, map fst (reverse rps), \_ -> DbgDone, P v' (V $ foldMap foldV (map (snd . fst) (reverse rps))))
-      go rps eid ios ((p, v):ps) = do
-        r <- advanceIO nid eid ios p v
-        case r of
-          (eid', ios', Syn (Pure a), dbg', v') -> go rps eid' ios' ps
-          (eid', ios', p', dbg', v') -> go (((p', v'), dbg'):rps) eid' ios' ps
-
-  (eid'', ios'', ps', dbg'', v'') <- go [] eid' ios' ps
-
-  case p' of
-    Syn (Pure a) -> advanceIO nid eid' ios' (Syn (next a)) $ case v' of
-      P pv _ -> pv
-      v' -> v'
-    otherwise -> pure (eid'', ios'', Syn (Free (Dyn e p' ps' next)), \_ -> DbgDone, v'') -- TODO: DbgDone
 
 -- emit
 advanceIO nid eid ios rsp@(Syn (Free (Emit (EventValue (Event _ e) _) _))) v
@@ -604,9 +501,6 @@ gather (Syn (Free (Await _ _))) = M.empty
 -- emit
 gather (Syn (Free (Emit e@(EventValue (Event _ ei) _) next))) = M.singleton ei e
 
--- dyn
-gather (Syn (Free (Dyn _ p ps _))) = M.unionWith concatEventValues (gather p) (M.unionsWith concatEventValues (map gather (map fst ps)))
-
 -- and
 gather (Syn (Free (And p q next))) = M.unionWith concatEventValues (gather q) (gather p)
 
@@ -616,9 +510,6 @@ gather (Syn (Free (Or p q next))) = M.unionWith concatEventValues (gather q) (ga
 gatherIO
   :: Syn v a
   -> IO (M.Map EventId EventValue)
-
--- remote
-gatherIO (Syn (Free (RemoteU trail _))) = trGather trail
 
 -- pure
 gatherIO (Syn (Pure _)) = pure M.empty
@@ -637,10 +528,6 @@ gatherIO (Syn (Free (Await _ _))) = pure M.empty
 
 -- emit
 gatherIO (Syn (Free (Emit e@(EventValue (Event _ ei) _) next))) = pure (M.singleton ei e)
-
--- dyn
-gatherIO (Syn (Free (Dyn _ p ps _))) =
-  M.unionWith concatEventValues <$> gatherIO p <*> (M.unionsWith concatEventValues <$> (traverse gatherIO (map fst ps)))
 
 -- and
 gatherIO (Syn (Free (And p q next))) = M.unionWith concatEventValues <$> gatherIO q <*> gatherIO p
@@ -706,17 +593,6 @@ exhaust nid p = do
     (Left a, v, _)  -> pure (a, foldV v)
     (Right _, _, _) -> error "Blocked"
 
--- Pools -----------------------------------------------------------------------
-
-data Pool v = Pool (Event Internal [Syn v ()])
-
-pool :: Monoid v => (Pool v -> Syn v a) -> Syn v a
-pool f = local' (<>) $ \e -> Syn (liftF (Dyn e (f (Pool e)) [] id))
-
-spawn :: Pool v -> Syn v () -> Syn v ()
-spawn (Pool e) p = do
-  emit e [p]
-
 --------------------------------------------------------------------------------
 
 {-# NOINLINE nextId #-}
@@ -754,40 +630,3 @@ push (Context nid v) (Event conc ei) a = modifyMVar v $ \v -> case v of
 
 event :: NodeId -> Application v (Event External a) r
 event nid app = newEvent nid >>= app
-
---------------------------------------------------------------------------------
-
-newTrail :: Monoid v => Context v a -> IO (Trail v a)
-newTrail (Context nid ctx) = do
-  pure $ Trail
-    { trNotify  = undefined
-    , trAdvance = modifyMVar ctx $ \ctx' -> case ctx' of
-        Nothing -> pure (Nothing, (Nothing, E))
-        Just (eid, p, v) -> do
-          (eid', ios, p', _, v') <- advanceIO nid eid [] p v
-          sequence_ ios
-          case p' of
-            Syn (Pure a) -> pure (Just (eid', p', v'), (Just a, v'))
-            _ -> pure (Just (eid', p', v'), (Nothing, v'))
-    , trGather  = modifyMVar ctx $ \ctx' -> case ctx' of
-        Nothing -> pure (Nothing, M.empty)
-        Just (_, p, _) -> (ctx',) <$> gatherIO p
-    , trUnblock = \m -> modifyMVar ctx $ \ctx' -> case ctx' of
-        Nothing -> pure (Nothing, False)
-        Just (eid, p, v) -> do
-          (p', u) <- unblockIO m p
-          pure (Just (eid, p', v), u)
-    }
-
---------------------------------------------------------------------------------
-
-data Mealy v a b = Mealy { runMealy :: a -> Syn v (a, Mealy v a b) } | Done b
-
-viewM :: Monoid v => [Mealy v a b] -> Mealy v [a] b
-viewM ms = go ms
-  where
-    replace i a as = take i as <> [a] <> drop (i + 1) as
-
-    go ms = Mealy $ \as -> do
-      ((a, next), i) <- orr [ (,i) <$> runMealy m a | (i, (m, a)) <- zip [0..] (zip ms as) ]
-      pure (replace i a as,  go (replace i next ms))

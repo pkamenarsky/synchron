@@ -3,38 +3,10 @@
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/lock_files
 
-packages:
-- completed:
-    hackage: broadcast-chan-0.2.0.2@sha256:563a482d8a2e2102598cc7d41d0cf079aee09077d3b6d6009b1fd1e41a74f1e9,6377
-    pantry-tree:
-      size: 755
-      sha256: d55193fde9c1233a341a7432ad4ac6afbd5d0a34690ab00c8be68b96ec522c2d
-  original:
-    hackage: broadcast-chan-0.2.0.2@sha256:563a482d8a2e2102598cc7d41d0cf079aee09077d3b6d6009b1fd1e41a74f1e9
-- completed:
-    hackage: list-zipper-0.0.9@sha256:9c5d6120f9a94bfe44c1a6d406fe80bb011a369526d972a720d73eab0aabc900,2413
-    pantry-tree:
-      size: 326
-      sha256: 85c575f1e57b795c46c3de9d9e9d8041a1a76f25abc724f4b9008b2234f362bf
-  original:
-    hackage: list-zipper-0.0.9@sha256:9c5d6120f9a94bfe44c1a6d406fe80bb011a369526d972a720d73eab0aabc900,2413
-- completed:
-    cabal-file:
-      size: 2016
-      sha256: 37fbd822c4b163189e676bd7d7dfcbef24ea3dfc989a66a20352283f4b02b46d
-    name: replica
-    version: 0.1.0.0
-    git: https://github.com/seagreen/replica.git
-    pantry-tree:
-      size: 1319
-      sha256: 02709671bc932e6e5106cb3113b4eb6cd2c232e9cd1b38234c7c6da7d1215833
-    commit: b265e6edc3e9dadb4011628761cd2642c2d4b34c
-  original:
-    git: https://github.com/seagreen/replica.git
-    commit: b265e6edc3e9dadb4011628761cd2642c2d4b34c
+packages: []
 snapshots:
 - completed:
-    size: 498155
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/13/19.yaml
-    sha256: b9367a80d4393d02e58a46b8a9fdfbd7bc19f59c0c2bbf90034ba15cf52cf213
-  original: lts-13.19
+    size: 532172
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/16/18.yaml
+    sha256: 4f2a092c6f4869854e8d7435ab98ce5157c641022c3cbfc4c4614ff3db752e62
+  original: lts-16.18
